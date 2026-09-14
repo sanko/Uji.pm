@@ -1,7 +1,7 @@
 ---
 abstract: 'Yet Another GUI Toolkit'
 author:
-  - 'Sanko Robinson <30663+sanko@users.noreply.github.com>'
+  - 'Sanko Robinson'
 build_requires: {}
 configure_requires:
   Module::Build::Tiny: '0.034'
@@ -23,6 +23,66 @@ provides:
   Uji:
     file: lib/Uji.pm
     version: v0.0.1
+  Uji::App:
+    file: lib/Uji/App.pm
+    version: v0.0.1
+  Uji::Driver:
+    file: lib/Uji/Driver.pm
+    version: v0.0.1
+  Uji::Driver::Cocoa:
+    file: lib/Uji/Driver/Cocoa.pm
+    version: v0.0.1
+  Uji::Driver::GTK4:
+    file: lib/Uji/Driver/GTK4.pm
+    version: v0.0.1
+  Uji::Driver::Win32:
+    file: lib/Uji/Driver/Win32.pm
+    version: v0.0.1
+  Uji::Layout:
+    file: lib/Uji/Layout.pm
+    version: v0.0.1
+  Uji::Node:
+    file: lib/Uji/Node.pm
+    version: v0.0.1
+  Uji::Node::Button:
+    file: lib/Uji/Node/Button.pm
+    version: v0.0.1
+  Uji::Node::Checkbox:
+    file: lib/Uji/Node/Checkbox.pm
+    version: v0.0.1
+  Uji::Node::Column:
+    file: lib/Uji/Node/Column.pm
+    version: v0.0.1
+  Uji::Node::Password:
+    file: lib/Uji/Node/Password.pm
+    version: v0.0.1
+  Uji::Node::Radio:
+    file: lib/Uji/Node/Radio.pm
+    version: v0.0.1
+  Uji::Node::RadioGroup:
+    file: lib/Uji/Node/RadioGroup.pm
+    version: v0.0.1
+  Uji::Node::Row:
+    file: lib/Uji/Node/Row.pm
+    version: v0.0.1
+  Uji::Node::Slider:
+    file: lib/Uji/Node/Slider.pm
+    version: v0.0.1
+  Uji::Node::Text:
+    file: lib/Uji/Node/Text.pm
+    version: v0.0.1
+  Uji::Node::TextInput:
+    file: lib/Uji/Node/TextInput.pm
+    version: v0.0.1
+  Uji::Node::Window:
+    file: lib/Uji/Node/Window.pm
+    version: v0.0.1
+  Uji::Reconciler:
+    file: lib/Uji/Reconciler.pm
+    version: v0.0.1
+requires:
+  Acme::Parataxis: '0'
+  Affix: '0'
 resources:
   license: http://www.perlfoundation.org/artistic_license_2_0
 version: v0.0.1
