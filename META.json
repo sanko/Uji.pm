@@ -1,0 +1,56 @@
+{
+   "abstract" : "Yet Another GUI Toolkit",
+   "author" : [
+      "Sanko Robinson"
+   ],
+   "description" : "Yet Another GUI Toolkit",
+   "dynamic_config" : 1,
+   "generated_by" : "App::mii v1.0.0",
+   "keywords" : [],
+   "license" : [
+      "artistic_2"
+   ],
+   "meta-spec" : {
+      "url" : "https://metacpan.org/pod/CPAN::Meta::Spec",
+      "version" : 2
+   },
+   "name" : "Uji",
+   "no_index" : {
+      "directory" : [],
+      "file" : [],
+      "namespace" : [],
+      "package" : []
+   },
+   "prereqs" : {
+      "configure" : {
+         "requires" : {
+            "Module::Build::Tiny" : "0.034",
+            "perl" : "v5.40.0"
+         }
+      },
+      "runtime" : {
+        "requires" : {
+            "Affix" : "0",
+            "Acme::Parataxis" :"0"
+        }
+      }
+   },
+   "provides" : {
+
+   },
+   "release_status" : "stable",
+   "resources" : {
+      "license" : [
+         "http://www.perlfoundation.org/artistic_license_2_0"
+      ],
+      "repository" : {}
+   },
+   "version" : "v0.0.1",
+   "x_custom_builder" : 0,
+   "x_ignore" : [
+      ".tidyallrc",
+      ".gitignore",
+      ".clang-format",
+      ".github/**"
+   ]
+}
