@@ -18,6 +18,11 @@ native FFI via Affix. This is a testbed for cooperative fibers via Acme::Paratax
 - [x] Vertical container (`Column`) with padding and spacing
 - [x] Horizontal container (`Row`) with padding and spacing
 - [x] Proportionate flexible sizing (`flex => 1`, `flex => 2`)
+- [ ] **Auto-resize policy** (design decision needed: how widgets size to content & parent)
+  - [x] Intrinsic sizing (measure phase: text metrics -> natural width/height)
+  - [ ] Parent-driven resize: re-layout on `WM_SIZE` (already tracked under Windows driver)
+  - [ ] Per-widget fit policy (`fill`, `fit`, `stretch`, `shrink`, `fixed`, `min`, `max`)
+  - [ ] Constraint/min-max plumbing down the tree
 - [ ] Cross-axis alignment (`stretch`, `center`, `start`, `end`)
 - [ ] Scrolling and overflow clipping containers (`ScrollView`)
 
@@ -28,6 +33,7 @@ native FFI via Affix. This is a testbed for cooperative fibers via Acme::Paratax
 - [x] `Text` (Static text label)
 - [x] `Button` (Clickable push button with `on_click` event)
 - [x] `TextInput` (Single-line input with two-way `on_input` binding)
+- [x] `PasswordInput` (Masked single-line text; `EDIT` with `ES_PASSWORD`)
 - [x] `Slider` (Range slider with `on_change` event; Win32 trackbar)
 
 ### Core Inputs (all toolkits must support)
@@ -37,7 +43,6 @@ native FFI via Affix. This is a testbed for cooperative fibers via Acme::Paratax
   - GTK4: `GtkCheckButton` inside a shared length-1 group
   - Cocoa: `NSButton` with `NSButtonTypeRadio`
 - [ ] `MultilineText` (Wrapping/scrollable text area; line breaks in `value`)
-- [ ] `PasswordInput` (Masked single-line text)
 - [ ] `ComboBox` (Editable dropdown; `options => [...]`, `on_select`)
 - [ ] `ListBox` (Scrollable list of options; `selection`/`on_select`)
 - [ ] `SpinBox` (Numeric stepper with `min`/`max`/`step`)
@@ -87,7 +92,7 @@ native FFI via Affix. This is a testbed for cooperative fibers via Acme::Paratax
   - [x] Common controls (`TRACKBAR` slider, via `InitCommonControlsEx`)
   - [x] Event routing via `WM_COMMAND` (`BN_CLICKED`, `EN_CHANGE`) + `WM_HSCROLL`
   - [ ] Standard system font application (replace default bitmap font with Segoe UI)
-  - [ ] Window resize handling (`WM_SIZE` -> re-layout pass)
+  - [x] Window resize handling (`WM_SIZE` -> re-layout pass)
   - [ ] Checkbox / radio button mapping (`BS_AUTOCHECKBOX`, `BS_AUTORADIOBUTTON`)
   - [ ] Combo/list box mapping (`CB_`, `LB_` messages, `WM_COMMAND` notifications)
   - [ ] Native dialogs (`GetOpenFileNameW`, `MessageBoxW`)
