@@ -1,19 +1,21 @@
 use v5.40;
 use experimental 'class';
-
-class Uji::Node {    # Base class for all VDOM nodes
+class Uji::Node v0.0.1 {    # Base class for all VDOM nodes
     field $id : param : reader : writer //= __CLASS__->_rand_id;
     sub _rand_id { CORE::state $id //= 100; ++$id; }
-    field $type : reader = __CLASS__->_type;
-    field $x    : param : reader = 0;    # requested x
-    field $y    : param : reader = 0;    # requested y
-    field $w    : param : reader = 0;    # requested w
-    field $h    : param : reader = 0;    # requested h
-    field $flex : param : reader = 0;
-    field $bx   : reader = 0;            # computed bounds (set per layout pass)
-    field $by   : reader = 0;
-    field $bw   : reader = 0;
-    field $bh   : reader = 0;
+    field $type    : reader = __CLASS__->_type;
+    field $x       : param : reader = 0;       # requested x
+    field $y       : param : reader = 0;       # requested y
+    field $w       : param : reader = 0;       # requested w
+    field $h       : param : reader = 0;       # requested h
+    field $flex    : param : reader = 0;
+    field $enabled : param : reader = 1;
+    field $visible : param : reader = 1;
+    field $tooltip : param : reader = undef;
+    field $bx      : reader = 0;               # computed bounds (set per layout pass)
+    field $by      : reader = 0;
+    field $bw      : reader = 0;
+    field $bh      : reader = 0;
 
     # set_bounds writes the computed geometry so compute() can re-derive from avail_sizes every
     # pass without stale 'requested' w/h shadowing
@@ -24,59 +26,63 @@ class Uji::Node {    # Base class for all VDOM nodes
         $bh = $nh;
     }
     method children () { [] }
-}
-
-class Uji::Node::Button : isa(Uji::Node) {
+};
+class Uji::Node::Button v0.0.1 : isa(Uji::Node) {
     field $label    : param : reader = '';
     field $on_click : param : reader = undef;
     sub _type {'button'}
 };
-
-class Uji::Node::Text : isa(Uji::Node) {
+class Uji::Node::Text v0.0.1 : isa(Uji::Node) {
     field $label : param : reader = '';
     sub _type {'text'}
-}
-
-class Uji::Node::TextInput : isa(Uji::Node) {
-    field $value    : param : reader = '';
-    field $on_input : param : reader = undef;
+};
+class Uji::Node::TextInput v0.0.1 : isa(Uji::Node) {
+    field $value     : param : reader = '';
+    field $on_input  : param : reader = undef;
+    field $readonly  : param : reader = 0;
+    field $maxlength : param : reader = 0;
+    field $focused   : param : reader = 0;
     sub _type {'text_input'}
-}
-
-class Uji::Node::Password : isa(Uji::Node::TextInput) {
+};
+class Uji::Node::Password v0.0.1 : isa(Uji::Node::TextInput) {
     sub _type {'password'}
-}
-
-class Uji::Node::Slider : isa(Uji::Node) {
+};
+class Uji::Node::Slider v0.0.1 : isa(Uji::Node) {
     field $value     : param : reader = 0;
     field $min       : param : reader = 0;
     field $max       : param : reader = 100;
+    field $step      : param : reader = 1;
     field $on_change : param : reader = undef;
     sub _type {'slider'}
-}
-
-class Uji::Node::Column : isa(Uji::Node) {
+};
+class Uji::Node::Column v0.0.1 : isa(Uji::Node) {
     field $children : param : reader = [];
     field $padding  : param : reader = 10;
     field $spacing  : param : reader = 10;
     sub _type {'column'}
-}
-
-class Uji::Node::Row : isa(Uji::Node) {
+};
+class Uji::Node::Row v0.0.1 : isa(Uji::Node) {
     field $children : param : reader = [];
     field $padding  : param : reader = 0;
     field $spacing  : param : reader = 10;
     sub _type {'row'}
-}
-
-class Uji::Node::Window : isa(Uji::Node) {
-    field $title : param : reader = 'Uji Application';
-    field $child : param : reader = undef;
+};
+class Uji::Node::Window v0.0.1 : isa(Uji::Node) {
+    field $title     : param : reader = 'Uji Application';
+    field $child     : param : reader = undef;
+    field $min_w     : param : reader = 0;
+    field $min_h     : param : reader = 0;
+    field $max_w     : param : reader = 0;                   # 0 = unconstrained
+    field $max_h     : param : reader = 0;
+    field $centered  : param : reader = 0;
+    field $topmost   : param : reader = 0;
+    field $minimized : param : reader = 0;
+    field $maximized : param : reader = 0;
+    field $resizable : param : reader = 1;
     sub _type          {'window'}
     method children () { $child ? [$child] : [] }
 };
-
-class Uji::Layout {
+class Uji::Layout v0.0.1 {
     field $driver : param : reader;
 
     # Natural (content) size of a node measured through the driver
@@ -203,8 +209,7 @@ class Uji::Layout {
         }
     }
 };
-
-class Uji::Driver {    # Base class/factory for OS detection
+class Uji::Driver v0.0.1 {    # Base class/factory for OS detection
 
     sub detect () {
         return Uji::Driver::Win32->new() if $^O eq 'MSWin32';
@@ -219,8 +224,7 @@ class Uji::Driver {    # Base class/factory for OS detection
     method update_registry    ($node)                 {...}
     method sync_window_bounds ($vtree)                {...}
 };
-
-class Uji::Driver::Win32 : isa(Uji::Driver) {
+class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
 
     # user32.dll, gdi32.dll
     use Affix  qw[:memory :types :core];
@@ -229,6 +233,8 @@ class Uji::Driver::Win32 : isa(Uji::Driver) {
     field $registry;
     field $wndproc_cb;
     field $main_hwnd;
+    field $main_vnode      : reader;
+    field $tooltip_hwnd    : reader                      = undef;
     field $on_resize       : reader(_get_resize_handler) = undef;
     field $suppress_events : reader(_is_suppressed)      = 0;
     ADJUST {
@@ -253,6 +259,8 @@ class Uji::Driver::Win32 : isa(Uji::Driver) {
             [ ULong, WString, WString, ULong, Int, Int, Int, Int, Pointer [Void], Size_t, Pointer [Void], Pointer [Void] ] => SSize_t;
         affix 'user32', 'ShowWindow',       [ Pointer [Void], Int ]                                      => Int;
         affix 'user32', 'SetWindowTextW',   [ Pointer [Void], WString ]                                  => Int;
+        affix 'user32', 'EnableWindow',     [ Pointer [Void], Int ]                                      => Int;
+        affix 'user32', 'SetFocus',         [ Pointer [Void] ]                                           => Pointer [Void];
         affix 'user32', 'SetWindowPos',     [ Pointer [Void], Pointer [Void], Int, Int, Int, Int, UInt ] => Int;
         affix 'user32', 'DefWindowProcW',   [ Pointer [Void], UInt, Size_t, SSize_t ]                    => SSize_t;
         affix 'user32', 'PeekMessageW',     [ Pointer [Void], Pointer [Void], UInt, UInt, UInt ]         => Int;
@@ -261,13 +269,30 @@ class Uji::Driver::Win32 : isa(Uji::Driver) {
         affix 'user32', 'UpdateWindow',     [ Pointer [Void] ]                                           => Int;
         affix 'user32', 'InvalidateRect',   [ Pointer [Void], Pointer [Void], Int ]                      => Int;
         affix 'user32', 'LoadCursorW',      [ Pointer [Void], Size_t ]                                   => Pointer [Void];
+        affix 'user32', 'GetSystemMetrics', [Int]                                                        => Int;
         affix 'user32', 'SendMessageW',     [ Pointer [Void], UInt, Size_t, SSize_t ]                    => SSize_t;
 
         # Read native control text
+        typedef RECT => Struct [ left => Int, top => Int, right => Int, bottom => Int ];
+        typedef POINT => Struct [ x => Int, y => Int ];
+        typedef MINMAXINFO =>
+            Struct [ ptReserved => POINT(), ptMaxSize => POINT(), ptMaxPosition => POINT(), ptMinTrackSize => POINT(), ptMaxTrackSize => POINT() ];
+        typedef TOOLINFO => Struct [
+            cbSize     => UInt,
+            uFlags     => UInt,
+            hwnd       => Pointer [Void],
+            uId        => Size_t,
+            rect       => RECT(),
+            hinst      => Pointer [Void],
+            lpszText   => WString,
+            lParam     => SSize_t,
+            lpReserved => Pointer [Void]
+        ];
         affix 'user32', 'GetWindowTextLengthW', [ Pointer [Void] ]                      => Int;
         affix 'user32', 'GetWindowTextW',       [ Pointer [Void], Pointer [Void], Int ] => Int;
         affix 'user32', 'GetClientRect',        [ Pointer [Void], Pointer [Void] ]      => Int;
-        typedef RECT => Struct [ left => Int, top => Int, right => Int, bottom => Int ];
+        affix 'user32', 'GetWindowRect',        [ Pointer [Void], Pointer [Void] ]      => Int;
+        affix 'user32', 'AdjustWindowRectEx',   [ Pointer [ RECT() ], UInt, Int, UInt ] => Int;
 
         # Text metrics for intrinsic sizing (measure natural widget size)
         affix 'user32', 'GetDC',                 [ Pointer [Void] ]                               => Pointer [Void];
@@ -330,9 +355,29 @@ class Uji::Driver::Win32 : isa(Uji::Driver) {
                 my $cb = $self_ref->_get_resize_handler;
                 $cb->( $cw, $ch ) if $cb;
             }
-            elsif ( $msg == 0x0214 ) {    # WM_SIZING -> proposed size; no layout here,
-
-                # the window is not resized yet (stale rect).
+            elsif ( $msg == 0x0024 ) {    # WM_GETMINMAXINFO -> clamp window track sizes to min/max
+                my $vn = $self_ref->main_vnode;
+                if ($vn) {
+                    my $mmi = cast( $lparam, MINMAXINFO() );
+                    my ( $min_w, $min_h ) = ( $vn->min_w, $vn->min_h );
+                    my ( $max_w, $max_h ) = ( $vn->max_w, $vn->max_h );
+                    if ( $min_w || $min_h || $max_w || $max_h ) {
+                        if ( $min_w || $min_h ) {
+                            my ( $ow, $oh ) = $self_ref->_frame_size_for_client( $min_w || 1, $min_h || 1 );
+                            $mmi->{ptMinTrackSize}{x} = $ow if $min_w;    # only constrain the axis given
+                            $mmi->{ptMinTrackSize}{y} = $oh if $min_h;
+                        }
+                        if ( $max_w || $max_h ) {
+                            my ( $ow, $oh ) = $self_ref->_frame_size_for_client( $max_w || 1, $max_h || 1 );
+                            $mmi->{ptMaxTrackSize}{x} = $ow if $max_w;
+                            $mmi->{ptMaxTrackSize}{y} = $oh if $max_h;
+                        }
+                        return 0;    # handled
+                    }
+                }
+                return DefWindowProcW( $hwnd, $msg, $wparam, $lparam );
+            }
+            elsif ( $msg == 0x020e ) {    # WM_MOVING -> nothing yet
             }
             elsif ( $msg == 0x0114 ) {    # WM_HSCROLL -> slider/trackbar drag
                 my $slider_hwnd = $lparam;
@@ -388,19 +433,117 @@ class Uji::Driver::Win32 : isa(Uji::Driver) {
 
     method update_registry ($node) {
         $registry->{ $node->id }{node} = $node if exists $registry->{ $node->id };
+
+        # Keep the live window node (read by WM_GETMINMAXINFO) current across re-renders.
+        if ( $node->type eq 'window' ) {
+            $main_vnode = $node;
+        }
     }
 
     method mount ($vtree) {
-        $main_hwnd = CreateWindowExW( 0, 'UjiWindowClass', $vtree->title, 0x10CF0000, 100, 100, $vtree->w, $vtree->h, undef, 0, undef, undef );
+
+        # Publish the window node before creating the HWND so WM_GETMINMAXINFO (fired during
+        # creation) can read min/max constraints immediately.
+        $main_vnode = $vtree;
+
+        # WS_OVERLAPPEDWINDOW (0x10CF0000); drop WS_THICKFRAME (0x00040000) when not resizable
+        my $style = $vtree->resizable ? 0x10CF0000 : 0x10CB0000;
+        $main_hwnd = CreateWindowExW( 0, 'UjiWindowClass', $vtree->title, $style, 100, 100, $vtree->w, $vtree->h, undef, 0, undef, undef );
         $registry->{ $vtree->id } = { hwnd => $main_hwnd, node => $vtree };
 
-        # Lay out against the real client area: the outer size includes the
-        # title bar and borders, so we re-measure and fix up the window node
-        # before children are computed.
+        # Lay out against the real client area: the outer size includes the title bar and borders,
+        # so we re-measure and fix up the window node before children are computed.
         my ( $cw, $ch ) = $self->_get_client_size($main_hwnd);
         $vtree->set_bounds( 0, 0, $cw, $ch );
-        ShowWindow( $main_hwnd, 5 );
+
+        # Centering must happen after the window has its final requested size. We re-apply the
+        # driver's own requested size (w/h) so a centered window does not drift from the spec.
+        if ( $vtree->centered ) {
+            $self->_set_window_outer( $main_hwnd, $vtree->w, $vtree->h, 'center' );
+            my ( $nw, $nh ) = $self->_get_client_size($main_hwnd);
+            $vtree->set_bounds( 0, 0, $nw, $nh );
+        }
+        SetWindowPos( $main_hwnd, $vtree->topmost ? -1 : -2, 0, 0, 0, 0, 0x0003 ) if $vtree->topmost;
+        ShowWindow( $main_hwnd, $vtree->maximized ? 3 : $vtree->minimized ? 2 : 5 );
         UpdateWindow($main_hwnd);
+    }
+
+    # Resize/reposition the main window from a NEW client size. Computes the outer size from the
+    # client size with AdjustWindowRectEx so the client area ends up exactly x w/h px.
+    # Convert a client-area size into the outer window-rect size (frame + borders), so that
+    # min/max track sizes in WM_GETMINMAXINFO can be expressed in window coordinates.
+    method _frame_size_for_client ( $cw, $ch ) {
+        my $rect_ptr = malloc( sizeof( RECT() ) );
+        my $rect     = cast( $rect_ptr, RECT() );
+        $rect->{left}   = 0;
+        $rect->{top}    = 0;
+        $rect->{right}  = $cw;
+        $rect->{bottom} = $ch;
+        AdjustWindowRectEx( $rect_ptr, 0x10CF0000, 0, 0 );
+        my ( $w, $h ) = ( $rect->{right} - $rect->{left}, $rect->{bottom} - $rect->{top} );
+        free($rect_ptr);
+        return ( $w, $h );
+    }
+
+    method _set_window_outer ( $hwnd, $cw, $ch, $mode = 'none' ) {
+        my $rect_ptr = malloc( sizeof( RECT() ) );
+        my $rect     = cast( $rect_ptr, RECT() );
+        $rect->{left}   = $rect->{top} = 0;
+        $rect->{right}  = $cw;
+        $rect->{bottom} = $ch;
+        AdjustWindowRectEx( $rect_ptr, 0x10CF0000, 0, 0 );
+        my ( $ow, $oh ) = ( $rect->{right} - $rect->{left}, $rect->{bottom} - $rect->{top} );
+        my ( $x,  $y );
+
+        if ( $mode eq 'center' ) {
+            my $sw = GetSystemMetrics(0);
+            my $sh = GetSystemMetrics(1);
+            $x = int( ( $sw - $ow ) / 2 );
+            $y = int( ( $sh - $oh ) / 2 );
+        }
+        else {
+            my $wrect_ptr = malloc( sizeof( RECT() ) );
+            my $wrect     = cast( $wrect_ptr, RECT() );
+            GetWindowRect( $hwnd, $wrect_ptr );
+            ( $x, $y ) = ( $wrect->{left}, $wrect->{top} );
+            free($wrect_ptr);
+        }
+        SetWindowPos( $hwnd, undef, $x, $y, $ow, $oh, 0x0004 );
+        free($rect_ptr);
+    }
+
+    # Lazily create the shared tooltip control (created once, owned by the main window).
+    method _ensure_tooltip () {
+        return $tooltip_hwnd if $tooltip_hwnd;
+        $tooltip_hwnd = CreateWindowExW(
+            0, 'tooltips_class32',    # TOOLTIPS_CLASS32
+            undef,
+
+            # WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX
+            0x80000003, 0, 0, 0, 0, $main_hwnd, 0, undef, undef
+        );
+        return $tooltip_hwnd;
+    }
+
+    # Attach/replace/remove a tooltip on a control. uFlags = TTF_IDISHWND | TTF_SUBCLASS.
+    # Deletes any existing tool first so repeated calls (live updates) are idempotent.
+    method _set_tooltip ( $hwnd, $text ) {
+        return unless $hwnd;
+        my $tip = $tooltip_hwnd || $self->_ensure_tooltip();
+        return unless $tip;
+        my $ti_ptr = malloc( sizeof( TOOLINFO() ) );
+        my $ti     = cast( $ti_ptr, TOOLINFO() );
+        $ti->{cbSize} = sizeof( TOOLINFO() );
+        $ti->{uFlags} = 0x0001 | 0x0010;                             # TTF_IDISHWND | TTF_SUBCLASS
+        $ti->{hwnd}   = $main_hwnd;
+        $ti->{uId}    = $hwnd;
+        SendMessageW( $tip, 0x0433, 0, Affix::address($ti_ptr) );    # TTM_DELTOOLW (ignore result)
+
+        if ( defined $text ) {
+            $ti->{lpszText} = $text;
+            SendMessageW( $tip, 0x0432, 0, Affix::address($ti_ptr) );    # TTM_ADDTOOLW
+        }
+        free($ti_ptr);
     }
 
     method sync_window_bounds ($vtree) {
@@ -480,19 +623,29 @@ class Uji::Driver::Win32 : isa(Uji::Driver) {
             $style = 0x50000001;
         }
         else {
-            foreach my $child ( @{ $vnode->children } ) {
-                $self->_mount_node( $child, $parent_hwnd );
-            }
+            $self->_mount_node( $_, $parent_hwnd ) for @{ $vnode->children };
             return;
         }
         my $hwnd = CreateWindowExW( 0, $class, $initial_text, $style, $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef,
             undef );
         $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode };
+
+        # Apply initial state for props that aren't baked into styles.
+        EnableWindow( $hwnd, $vnode->enabled ? 1 : 0 );
+        ShowWindow( $hwnd, $vnode->visible   ? 5 : 0 );
+        $self->_set_tooltip( $hwnd, $vnode->tooltip ) if defined $vnode->tooltip;
+        if ( $vnode->type eq 'text_input' || $vnode->type eq 'password' ) {
+            SendMessageW( $hwnd, 0x00CF, $vnode->readonly ? 1 : 0, 0 );                  # EM_SETREADONLY
+            SendMessageW( $hwnd, 0x00C5, $vnode->maxlength, 0 ) if $vnode->maxlength;    # EM_LIMITTEXT
+            SetFocus($hwnd) if $vnode->focused;
+        }
         if ( $vnode->type eq 'slider' ) {
 
             # TBM_SETRANGE (0x0406): (max << 16) | min, wParam = redraw
             SendMessageW( $hwnd, 0x0406, 1, ( $vnode->max << 16 ) | $vnode->min );
-            SendMessageW( $hwnd, 0x0405, 1, $vnode->value );    # TBM_SETPOS
+            SendMessageW( $hwnd, 0x0405, 1, $vnode->value );                             # TBM_SETPOS
+            SendMessageW( $hwnd, 0x041C, 1, $vnode->step );                              # TBM_SETLINESIZE
+            SendMessageW( $hwnd, 0x041D, 1, $vnode->step );                              # TBM_SETPAGESIZE
         }
     }
 
@@ -502,6 +655,27 @@ class Uji::Driver::Win32 : isa(Uji::Driver) {
         if ( $prop_name eq 'title' ) {    # Window title (root node)
             $main_hwnd = $record->{hwnd};
             SetWindowTextW( $main_hwnd, $value );
+        }
+        elsif ( $prop_name eq 'topmost' ) {    # window: toggle always-on-top
+            SetWindowPos( $record->{hwnd}, $value ? -1 : -2, 0, 0, 0, 0, 0x0013 );
+        }
+        elsif ( $prop_name eq 'minimized' || $prop_name eq 'maximized' ) {    # window state
+            if ($value) {
+                ShowWindow( $record->{hwnd}, $prop_name eq 'minimized' ? 2 : 3 );    # SW_MINIMIZE / SW_MAXIMIZE
+            }
+            else {
+                ShowWindow( $record->{hwnd}, 9 );                                    # SW_RESTORE
+            }
+        }
+        elsif ( $prop_name =~ /^(min|max)_[wh]$/ ) {                                 # window min/max -> re-clamp live
+            my $vn = $main_vnode || $record->{node};
+            my ( $cw, $ch ) = $self->_get_client_size( $record->{hwnd} );
+            my ( $nw, $nh ) = ( $cw, $ch );
+            if ( $vn->min_w && $nw < $vn->min_w ) { $nw = $vn->min_w }
+            if ( $vn->min_h && $nh < $vn->min_h ) { $nh = $vn->min_h }
+            if ( $vn->max_w && $nw > $vn->max_w ) { $nw = $vn->max_w }
+            if ( $vn->max_h && $nh > $vn->max_h ) { $nh = $vn->max_h }
+            $self->_set_window_outer( $record->{hwnd}, $nw, $nh ) if $nw != $cw || $nh != $ch;
         }
         elsif ( $prop_name eq 'label' ) {
             SetWindowTextW( $record->{hwnd}, $value );
@@ -525,6 +699,31 @@ class Uji::Driver::Win32 : isa(Uji::Driver) {
                 SendMessageW( $record->{hwnd}, 0x00B1, $len, $len );
             }
         }
+        elsif ( $prop_name eq 'enabled' ) {    # all widgets
+            EnableWindow( $record->{hwnd}, $value ? 1 : 0 );
+        }
+        elsif ( $prop_name eq 'visible' ) {    # all widgets
+            ShowWindow( $record->{hwnd}, $value ? 5 : 0 );
+        }
+        elsif ( $prop_name eq 'focused' ) {    # text_input / password
+            SetFocus( $record->{hwnd} ) if $value;
+        }
+        elsif ( $prop_name eq 'tooltip' ) {    # all widgets
+            $self->_set_tooltip( $record->{hwnd}, $value );
+        }
+        elsif ( $prop_name eq 'readonly' ) {    # EDIT: EM_SETREADONLY
+            return unless $record->{node}->can('value');
+            SendMessageW( $record->{hwnd}, 0x00CF, $value ? 1 : 0, 0 );
+        }
+        elsif ( $prop_name eq 'maxlength' ) {    # EDIT: EM_LIMITTEXT
+            return unless $record->{node}->can('value');
+            SendMessageW( $record->{hwnd}, 0x00C5, $value, 0 );
+        }
+        elsif ( $prop_name eq 'step' ) {         # slider: TBM_SETLINESIZE / TBM_SETPAGESIZE
+            return unless $record->{node}->type eq 'slider';
+            SendMessageW( $record->{hwnd}, 0x041C, 1, $value );
+            SendMessageW( $record->{hwnd}, 0x041D, 1, $value );
+        }
         elsif ( $prop_name eq 'min' || $prop_name eq 'max' ) {
             return unless $record->{node}->type eq 'slider';
             my $min = $prop_name eq 'min' ? $value : $record->{node}->min;
@@ -540,15 +739,12 @@ class Uji::Driver::Win32 : isa(Uji::Driver) {
         return unless $record;
         SetWindowPos( $record->{hwnd}, undef, $x, $y, $w, $h, 0x0004 );
     }
-}
-
-class Uji::Driver::GTK4 : isa(Uji::Driver) {    # libgtk-4.so, libglib-2.0.so
-}
-
-class Uji::Driver::Cocoa : isa(Uji::Driver) {    # libobjc.A.dylib (macOS Runtime)
-}
-
-class Uji::Reconciler {    # VDOM diffing and patching engine
+};
+class Uji::Driver::GTK4 v0.0.1 : isa(Uji::Driver) {    # libgtk-4.so, libglib-2.0.so
+};
+class Uji::Driver::Cocoa v0.0.1 : isa(Uji::Driver) {    # libobjc.A.dylib (macOS Runtime)
+};
+class Uji::Reconciler v0.0.1 {                          # VDOM diffing and patching engine
 
     method patch ( $old_node, $new_node, $driver ) {
         return unless $old_node && $new_node;
@@ -586,6 +782,54 @@ class Uji::Reconciler {    # VDOM diffing and patching engine
             }
         }
 
+        # Check step (Slider)
+        if ( $old_node->can('step') && $old_node->step ne $new_node->step ) {
+            $driver->set_prop( $new_node->id, 'step', $new_node->step );
+        }
+
+        # Check enabled (all widgets)
+        if ( $old_node->can('enabled') && $old_node->enabled != $new_node->enabled ) {
+            $driver->set_prop( $new_node->id, 'enabled', $new_node->enabled );
+        }
+
+        # Check visible (all widgets)
+        if ( $old_node->can('visible') && $old_node->visible != $new_node->visible ) {
+            $driver->set_prop( $new_node->id, 'visible', $new_node->visible );
+        }
+
+        # Check focused (TextInput, Password)
+        if ( $old_node->can('focused') && $old_node->focused != $new_node->focused ) {
+            $driver->set_prop( $new_node->id, 'focused', $new_node->focused );
+        }
+
+        # Check tooltip (all widgets)
+        if ( $old_node->can('tooltip') && ( $old_node->tooltip // '' ) ne ( $new_node->tooltip // '' ) ) {
+            $driver->set_prop( $new_node->id, 'tooltip', $new_node->tooltip );
+        }
+
+        # Check readonly / maxlength (TextInput, Password)
+        if ( $old_node->can('readonly') && $old_node->readonly != $new_node->readonly ) {
+            $driver->set_prop( $new_node->id, 'readonly', $new_node->readonly );
+        }
+        if ( $old_node->can('maxlength') && $old_node->maxlength ne $new_node->maxlength ) {
+            $driver->set_prop( $new_node->id, 'maxlength', $new_node->maxlength );
+        }
+
+        # Window geometry / state (topmost, min/max, minimized, maximized)
+        if ( $old_node->can('topmost') && $old_node->topmost != $new_node->topmost ) {
+            $driver->set_prop( $new_node->id, 'topmost', $new_node->topmost );
+        }
+        for my $p (qw[ minimized maximized ]) {
+            if ( $old_node->can($p) && $old_node->$p != $new_node->$p ) {
+                $driver->set_prop( $new_node->id, $p, $new_node->$p );
+            }
+        }
+        for my $p (qw[ min_w min_h max_w max_h ]) {
+            if ( $old_node->can($p) && $old_node->$p ne $new_node->$p ) {
+                $driver->set_prop( $new_node->id, $p, $new_node->$p );
+            }
+        }
+
         # Check Bounds (skip window its size is managed by the OS)
         if ( $old_node->type ne 'window' ) {
             if ( $old_node->bx != $new_node->bx ||
@@ -607,8 +851,7 @@ class Uji::Reconciler {    # VDOM diffing and patching engine
         }
     }
 };
-
-class Uji::App {    # The TEA Runtime (Parataxis fibers & message loop)
+class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
     use Acme::Parataxis          qw[async fiber await_sleep];
     use Acme::Parataxis::Channel qw[];
     field $init   : param;
@@ -621,6 +864,16 @@ class Uji::App {    # The TEA Runtime (Parataxis fibers & message loop)
     field $reconciler : param //= Uji::Reconciler->new();
     field $layout     : param //= Uji::Layout->new( driver => $driver );
 
+    # Clamp a client-area size against the window node's min/max constraints.
+    # (min/max live on the root window node so the layout has a single source of truth.)
+    method _clamp_size ( $cw, $ch ) {
+        $cw = $vtree->min_w if $vtree->min_w && $cw < $vtree->min_w;
+        $ch = $vtree->min_h if $vtree->min_h && $ch < $vtree->min_h;
+        $cw = $vtree->max_w if $vtree->max_w && $cw > $vtree->max_w;
+        $ch = $vtree->max_h if $vtree->max_h && $ch > $vtree->max_h;
+        return ( $cw, $ch );
+    }
+
     method _relayout_now ( $cw = undef, $ch = undef ) {
         return unless $vtree && $driver->can('_is_mounted') && $driver->_is_mounted();
 
@@ -629,6 +882,7 @@ class Uji::App {    # The TEA Runtime (Parataxis fibers & message loop)
         # not supplied. Runs inside the wndproc, so no fiber switch allows live updates during the
         # drag loop.
         if ( defined $cw && defined $ch ) {
+            ( $cw, $ch ) = $self->_clamp_size( $cw, $ch );
             $vtree->set_bounds( 0, 0, $cw, $ch );
         }
         else {
@@ -665,15 +919,15 @@ class Uji::App {    # The TEA Runtime (Parataxis fibers & message loop)
                 while ( my $msg = $channel->get() ) {
                     exit(0) if ref $msg eq 'HASH' && $msg->{type} eq 'QUIT';
 
-                    # Drain the whole queue in one pass so fast typing collapses
-                    # into a single render with the latest state (no stale writes).
+                    # Drain the whole queue in one pass so fast typing collapses into a single
+                    # render with the latest state (no stale writes).
                     my @batch = ($msg);
                     push @batch, $channel->get() while $channel->size;
                     for my $m (@batch) {
                         exit(0) if ref $m eq 'HASH' && $m->{type} eq 'QUIT';
 
-                        # WM_SIZE -> skip the app's update (model unchanged),
-                        # but fall through so the re-layout below still runs.
+                        # WM_SIZE -> skip the app's update (model unchanged), but fall through so
+                        # the re-layout below still runs.
                         next if $m->{type} eq 'RESIZE';
                         ( my $new_model, my $new_cmd ) = $update->( $m, $model );
                         $model = $new_model;
@@ -689,26 +943,38 @@ class Uji::App {    # The TEA Runtime (Parataxis fibers & message loop)
     }
 };
 
-package Uji {
+package Uji v0.0.1 {
     use v5.40;
     use Exporter qw[import];
     our @EXPORT = qw[app window column row text button text_input password slider];
-    sub app        (%args)  { Uji::App->new(%args) }
-    sub window     (%args)  { Uji::Node::Window->new(%args) }
-    sub column     (%args)  { Uji::Node::Column->new(%args) }
-    sub row        (%args)  { Uji::Node::Row->new(%args) }
-    sub text       ($label) { Uji::Node::Text->new( label => $label ) }
-    sub button     (%args)  { Uji::Node::Button->new(%args) }
-    sub text_input (%args)  { Uji::Node::TextInput->new(%args) }
-    sub password   (%args)  { Uji::Node::Password->new(%args) }
-    sub slider     (%args)  { Uji::Node::Slider->new(%args) }
+    sub app        (%args)           { Uji::App->new(%args) }
+    sub window     (%args)           { Uji::Node::Window->new(%args) }
+    sub column     (%args)           { Uji::Node::Column->new(%args) }
+    sub row        (%args)           { Uji::Node::Row->new(%args) }
+    sub text       ( $label, %args ) { Uji::Node::Text->new( label => $label, %args ) }
+    sub button     (%args)           { Uji::Node::Button->new(%args) }
+    sub text_input (%args)           { Uji::Node::TextInput->new(%args) }
+    sub password   (%args)           { Uji::Node::Password->new(%args) }
+    sub slider     (%args)           { Uji::Node::Slider->new(%args) }
 };
 #
 package main {
     use v5.40;
 
     sub init () {
-        return ( { title => 'Uji.pm Flexbox Demo', name => 'World', count => 0, level => 50, secret => '' }, undef );
+        return (
+            {   title       => 'Uji.pm Flexbox Demo',
+                name        => 'World',
+                count       => 0,
+                level       => 50,
+                secret      => '',
+                locked      => 0,
+                topmost     => 0,
+                constrained => 0,
+                show_extra  => 1
+            },
+            undef
+        );
     }
 
     sub update ( $msg, $model ) {
@@ -717,6 +983,18 @@ package main {
         }
         elsif ( $msg->{type} eq 'SET_NAME' ) {
             $model->{name} = $msg->{value};
+        }
+        elsif ( $msg->{type} eq 'TOGGLE_LOCK' ) {
+            $model->{locked} = $model->{locked} ? 0 : 1;
+        }
+        elsif ( $msg->{type} eq 'TOGGLE_TOPMOST' ) {
+            $model->{topmost} = $model->{topmost} ? 0 : 1;
+        }
+        elsif ( $msg->{type} eq 'TOGGLE_CONSTRAINTS' ) {
+            $model->{constrained} = $model->{constrained} ? 0 : 1;
+        }
+        elsif ( $msg->{type} eq 'TOGGLE_EXTRA' ) {
+            $model->{show_extra} = $model->{show_extra} ? 0 : 1;
         }
         elsif ( $msg->{type} eq 'SET_SECRET' ) {
             $model->{secret} = $msg->{value};
@@ -735,28 +1013,54 @@ package main {
 
     sub view ($model) {
         Uji::window(
-            title => $model->{title} // 'Application',
-            w     => 360,
-            h     => 400,
-            child => Uji::column(
+            title     => $model->{title} // 'Application',
+            w         => 360,
+            h         => 420,
+            topmost   => $model->{topmost},
+            min_w     => $model->{constrained} ? 300 : 0,
+            max_w     => $model->{constrained} ? 500 : 0,
+            min_h     => $model->{constrained} ? 200 : 0,
+            max_h     => $model->{constrained} ? 420 : 0,
+            centered  => 1,
+            resizable => 1,
+            child     => Uji::column(
                 padding  => 15,
                 spacing  => 12,
                 children => [
                     (    # Window title, editable live from the model
                         Uji::text( 'Title: ' . ( $model->{title} // '' ) ),
-                        Uji::text_input( value => $model->{title} // '', on_input => sub ($text) { { type => 'SET_TITLE', value => $text } } )
+                        Uji::text_input(
+                            value     => $model->{title} // '',
+                            readonly  => $model->{locked},
+                            maxlength => 20,
+                            on_input  => sub ($text) { { type => 'SET_TITLE', value => $text } }
+                        )
                     ), (
-                        # Live two-way text binding
+                        # Live two-way text binding; locked disables the edit box
                         Uji::text( 'Hello, ' . $model->{name} . '!' ),
-                        Uji::text_input( value => $model->{name}, on_input => sub ($text) { { type => 'SET_NAME', value => $text } } )
+                        Uji::text_input(
+                            value    => $model->{name},
+                            enabled  => !$model->{locked},
+                            focused  => $model->{locked} ? 0 : 1,
+                            on_input => sub ($text) { { type => 'SET_NAME', value => $text } }
+                        )
                     ), (
-                        # Range slider with live on_change binding
+                        # Range slider with live on_change binding; locked snaps in steps of 25
                         Uji::text( 'Level: ' . $model->{level} ),
-                        Uji::slider( value => $model->{level}, min => 0, max => 100, on_change => sub ($v) { { type => 'SET_LEVEL', value => $v } } )
+                        Uji::slider(
+                            value     => $model->{level},
+                            min       => 0,
+                            max       => 100,
+                            step      => ( $model->{locked} ? 25 : 1 ),
+                            on_change => sub ($v) { { type => 'SET_LEVEL', value => $v } }
+                        )
                     ), (
                         # Masked password field with two-way binding
                         Uji::password( value => $model->{secret}, on_input => sub ($text) { { type => 'SET_SECRET', value => $text } } ),
-                        Uji::text( 'Secret: ' . ( '#' x length $model->{secret} ) . ( $model->{secret} ? '' : '(empty)' ) )
+                        Uji::text(
+                            'Secret: ' . ( '#' x length $model->{secret} ) . ( $model->{secret} ? '' : '(empty)' ),
+                            visible => $model->{show_extra}
+                        )
                     ), (
                         # Horizontal row with proportional flex buttons
                         Uji::text( 'Counter: ' . $model->{count} ),
@@ -768,6 +1072,30 @@ package main {
                                 Uji::button( label => '+1',    flex => 2, on_click => { type => 'INCREMENT' } ),
                                 Uji::button( label => 'Reset', flex => 1, on_click => { type => 'RESET' } )
                             ]
+                        )
+                    ), (
+                        # Toggle enabled/readonly/step behavior across the app
+                        Uji::button(
+                            label    => ( $model->{locked} ? 'Unlock' : 'Lock' ),
+                            on_click => { type => 'TOGGLE_LOCK' },
+                            tooltip  => 'Toggles enabled on the name box, readonly on the title box, and the slider step'
+                        ), (
+                            Uji::button(
+                                label    => 'Topmost: ' . ( $model->{topmost} ? 'ON' : 'OFF' ),
+                                on_click => { type => 'TOGGLE_TOPMOST' },
+                                tooltip  => 'Keeps this window above all others'
+                            ),
+                            Uji::button(
+                                label    => 'Constraints: ' . ( $model->{constrained} ? 'ON' : 'OFF' ),
+                                on_click => { type => 'TOGGLE_CONSTRAINTS' },
+                                tooltip  => 'Clamps the window between 300/500 wide and 200/420 tall'
+                            )
+                        ), (
+                            Uji::button(
+                                label    => 'Secret hint ' . ( $model->{show_extra} ? 'shown' : 'hidden' ),
+                                on_click => { type => 'TOGGLE_EXTRA' },
+                                tooltip  => 'Shows/hides the secret text line (visible prop)'
+                            )
                         )
                     )
                 ]
