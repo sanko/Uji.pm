@@ -1,0 +1,169 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Button - A clickable push button
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    # Fire a static message when clicked.
+    Uji::button( label => '+1', on_click => { type => 'INCREMENT' } );
+
+    # In a row, stretch buttons proportionally with flex.
+    Uji::row(
+        spacing  => 10,
+        children => [
+            Uji::button( label => '+1',    flex => 2, on_click => { type => 'INCREMENT' } ),
+            Uji::button( label => 'Reset', flex => 1, on_click => { type => 'RESET' } )
+        ]
+    );
+
+    # Disable it, hide it, or give it a tooltip.
+    Uji::button(
+        label   => 'Save',
+        enabled => $model->{dirty},
+        visible => $model->{show_save},
+        tooltip => 'Persists your changes',
+        on_click => { type => 'SAVE' }
+    );
+
+=head1 DESCRIPTION
+
+Uji::Node::Button is the standard push button. It renders as a native platform button and, when clicked, places a
+message onto the application's message channel for the C<update> function to fold into the model.
+
+A button is B<stateless from the model's point of view>: it has no I<value>, so the model holds nothing about it
+besides the variables that drive its parameters (C<enabled>, C<visible>, C<label>, C<flex>). Everything a button does
+is carried by L</on_click>.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally never call C<new> directly. The L<Uji|Uji/button> helper is shorter and is exported by default:
+
+    Uji::button( label => 'Go', flex => 1, on_click => { type => 'GO' } );
+
+...is equivalent to...
+
+    Uji::Node::Button->new( label => 'Go', flex => 1, on_click => { type => 'GO' } );
+
+=head3 Parameters
+
+=head4 C<label>
+
+The text drawn on the button face. Default C<''>.
+
+=head4 C<on_click>
+
+What to do when the button is clicked. Either a static message hashref or a callback:
+
+    on_click => { type => 'INCREMENT' }
+    on_click => sub { { type => 'RESET', value => 0 } }
+
+A static hashref is sent verbatim into the update loop; it is the message C<update> receives as
+C<< $msg->{type} = 'INCREMENT' >>. A callback is invoked at click time and its return value (a
+message hashref, or C<undef> to ignore the click) is sent instead. The callback form is handy when
+the message depends on data available only at click time.
+
+Use one form per button; both are dispatched the same way by the Win32 driver (the callback is
+called, the hashref is sent as-is).
+
+=head3 Inherited Parameters
+
+C<Uji::Node::Button> inherits the common parameters from L<Uji::Node|Uji::Node/COMMON PARAMETERS>. In particular:
+
+=over
+
+=item C<id>
+
+A stable identifier (auto-generated 101, 102, ...). The reconciler preserves a button's native handle across re-renders
+by transferring ids.
+
+=item C<flex>
+
+In a flex container, the button grows to fill leftover space proportionally. Two buttons with C<flex =E<gt> 2> and
+C<flex =E<gt> 1> split available width 2:1.
+
+=item C<enabled>
+
+C<1> onClickable (default), C<0> to grey it out. Live when the model changes it.
+
+=item C<visible>
+
+C<1> to show (default), C<0> to hide it. Live.
+
+=item C<tooltip>
+
+An optional hover tooltip string.
+
+=item C<x>, C<y>, C<w>, C<h>
+
+Requested position/size. Prefer container C<flex> over manual geometry.
+
+=back
+
+=head1 Methods
+
+=head2 C<label>
+
+Returns the button's text.
+
+=head2 C<on_click>
+
+Returns the message hashref (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'button'>.
+
+=head1 How it Works
+
+On Win32 the button is created as a child B<BUTTON> control with C<WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON>. A click
+posts C<WM_COMMAND> with the C<BN_CLICKED> notification to the parent window; the platform driver looks the control up
+in its registry by id and C<put>s the L</on_click> message onto the channel. The render fiber drains it, folds it
+through C<update>, re-runs the view, and the reconciler diffs the new tree against the old so a rendered label change,
+position change, or flex change becomes the smallest set of native updates.
+
+Nothing about this requires a handle, so a button tested against the mock driver in C<t/lib/MockDriver.pm> exercises
+the same logic as the real driver. See L<Uji|Uji/The Message Round-Trip, Annotated> for the full walk-through.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - the toolkit entry point (exports C<button>)
+
+=item * L<Uji::Node> - the base node class and shared parameters
+
+=item * L<Uji::Node::Checkbox>, L<Uji::Node::Radio> - other BUTTON-derived widgets
+
+=item * L<Uji::App>, L<Uji::Reconciler> - the runtime that consumes C<on_click>
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+hashref flex onClickable BS_PUSHBUTTON btn renderer diffs
+
+=end stopwords
+
+=cut
