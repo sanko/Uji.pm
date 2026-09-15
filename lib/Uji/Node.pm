@@ -12,6 +12,10 @@ class Uji::Node v0.0.1 {    # Base class for all VDOM nodes
     field $enabled : param : reader = 1;
     field $visible : param : reader = 1;
     field $tooltip : param : reader = undef;
+    field $color       : param : reader = undef;    # foreground text colour ('#RRGGBB')
+    field $background  : param : reader = undef;    # background fill colour ('#RRGGBB')
+    field $font        : param : reader = undef;    # font family name (undef = DEFAULT_GUI_FONT)
+    field $font_size   : param : reader = undef;    # point size (undef = system default ~9pt)
     field $bx      : reader = 0;               # computed bounds (set per layout pass)
     field $by      : reader = 0;
     field $bw      : reader = 0;
@@ -26,5 +30,9 @@ class Uji::Node v0.0.1 {    # Base class for all VDOM nodes
         $bh = $nh;
     }
     method children () { [] }
+
+    # Props that require native control recreation when changed (mount-time-only styles).
+    # Subclasses override to list their mount-only prop names.
+    method _mount_only_props () { [] }
 };
 1;

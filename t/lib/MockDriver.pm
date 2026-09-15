@@ -54,11 +54,31 @@ class MockDriver {
         return 1;
     }
 
+    # Mirror the Win32 recreate_node: destroy the native control and remount the same id with a
+    # fresh node. In the mock, "destroy" just re-points the registry record and re-applies the
+    # mount-time checks as if the control were brand new.
+    method recreate_node ( $old_id, $new_node ) {
+        push @$calls, [ 'recreate_node', $old_id, $new_node->id ];
+        $new_node->set_id($old_id);
+        my $rec = $registry->{$old_id} or return 1;
+        $rec->{node} = $new_node;
+        delete $checks->{$old_id};
+        if ( $new_node->type eq 'checkbox' || $new_node->type eq 'toggle_switch' || $new_node->type eq 'toggle_button' ) {
+            $checks->{$old_id} = $new_node->checked ? 1 : 0;
+        }
+        elsif ( $new_node->type eq 'radio' ) {
+            $checks->{$old_id} = $new_node->selected ? 1 : 0;
+        }
+        1;
+    }
+
     method _register ($node) {
         $registry->{ $node->id } = { hwnd => $node->id, node => $node };
 
         # Mirror the real driver's initial BM_SETCHECK/BM_SETPOS at mount time.
-        if    ( $node->type eq 'checkbox' ) { $checks->{ $node->id } = $node->checked  ? 1 : 0 }
+        if    ( $node->type eq 'checkbox' || $node->type eq 'toggle_switch' || $node->type eq 'toggle_button' ) {
+            $checks->{ $node->id } = $node->checked ? 1 : 0;
+        }
         elsif ( $node->type eq 'radio' )    { $checks->{ $node->id } = $node->selected ? 1 : 0 }
         $self->_register($_) for @{ $node->children };
     }

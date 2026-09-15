@@ -5,7 +5,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
 
     # user32.dll, gdi32.dll
     use Affix  qw[:memory :types :core];
-    use Encode qw[decode];
+    use Encode qw[decode encode];
     field $channel : reader;
     field $registry;
     field $wndproc_cb;
@@ -14,8 +14,12 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     field $tooltip_hwnd    : reader                      = undef;
     field $on_resize       : reader(_get_resize_handler) = undef;
     field $suppress_events : reader(_is_suppressed)      = 0;
+    field $item_pins;           # hwnd -> [ malloc'd UTF-16 item strings still referenced by the control ]
+    field $brush_cache = {};    # '#RRGGBB' -> HBRUSH
+    field $font_cache  = {};    # 'Name|Size' -> HFONT
     ADJUST {
-        $registry = {};
+        $registry  = {};
+        $item_pins = {};
         typedef WNDPROC => Callback [ [ Pointer [Void], UInt, Size_t, SSize_t ] => SSize_t ];
         typedef WNDCLASSEXW => Struct [
             cbSize        => UInt,
@@ -34,6 +38,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'user32', 'RegisterClassExW', [ Pointer [ WNDCLASSEXW() ] ] => UShort;
         affix 'user32', 'CreateWindowExW',
             [ ULong, WString, WString, ULong, Int, Int, Int, Int, Pointer [Void], Size_t, Pointer [Void], Pointer [Void] ] => SSize_t;
+        affix 'user32', 'DestroyWindow',    [ Pointer [Void] ]                                           => Int;
         affix 'user32', 'ShowWindow',       [ Pointer [Void], Int ]                                      => Int;
         affix 'user32', 'SetWindowTextW',   [ Pointer [Void], WString ]                                  => Int;
         affix 'user32', 'EnableWindow',     [ Pointer [Void], Int ]                                      => Int;
@@ -45,9 +50,33 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'user32', 'DispatchMessageW', [ Pointer [Void] ]                                           => SSize_t;
         affix 'user32', 'UpdateWindow',     [ Pointer [Void] ]                                           => Int;
         affix 'user32', 'InvalidateRect',   [ Pointer [Void], Pointer [Void], Int ]                      => Int;
+        affix 'user32', 'GetCursorPos',     [ Pointer [Void] ]                                           => Int;
         affix 'user32', 'LoadCursorW',      [ Pointer [Void], Size_t ]                                   => Pointer [Void];
         affix 'user32', 'GetSystemMetrics', [Int]                                                        => Int;
         affix 'user32', 'SendMessageW',     [ Pointer [Void], UInt, Size_t, SSize_t ]                    => SSize_t;
+
+        # Colour / font support
+        affix 'gdi32', 'SetTextColor',        [ Pointer [Void], ULong ] => ULong;
+        affix 'gdi32', 'SetBkColor',          [ Pointer [Void], ULong ] => ULong;
+        affix 'gdi32', 'CreateSolidBrush',    [ULong]                   => Pointer [Void];
+        affix 'gdi32', 'DeleteObject',        [ Pointer [Void] ]        => Int;
+        affix 'gdi32', 'CreateFontIndirectW', [ Pointer [Void] ]        => Pointer [Void];
+        typedef LOGFONTW => Struct [
+            lfHeight         => Int,
+            lfWidth          => Int,
+            lfEscapement     => Int,
+            lfOrientation    => Int,
+            lfWeight         => Int,
+            lfItalic         => UChar,
+            lfUnderline      => UChar,
+            lfStrikeOut      => UChar,
+            lfCharSet        => UChar,
+            lfOutPrecision   => UChar,
+            lfClipPrecision  => UChar,
+            lfQuality        => UChar,
+            lfPitchAndFamily => UChar,
+            lfFaceName       => Array [ WChar, 32 ]
+        ];
 
         # Read native control text
         typedef RECT => Struct [ left => Int, top => Int, right => Int, bottom => Int ];
@@ -79,13 +108,22 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'gdi32',  'GetTextExtentPoint32W', [ Pointer [Void], WString, Int, Pointer [Void] ] => Int;
         typedef SIZE => Struct [ cx => Int, cy => Int ];
 
-        # Common controls (trackbar/slider, etc.)
+        # Common controls (trackbar/slider, up/down spinner, progress bar, etc.)
         typedef INITCOMMONCONTROLSEX => Struct [ dwSize => ULong, dwICC => ULong ];
         affix 'comctl32', 'InitCommonControlsEx', [ Pointer [ INITCOMMONCONTROLSEX() ] ] => Int;
+
+        # Window enumeration / introspection (used by probes and tests)
+        affix 'user32', 'FindWindowW',              [ WString, WString ]                    => Pointer [Void];
+        affix 'user32', 'GetWindow',                [ Pointer [Void], UInt ]                => Pointer [Void];
+        affix 'user32', 'GetClassNameW',            [ Pointer [Void], Pointer [Void], Int ] => Int;
+        affix 'user32', 'GetWindowLongW',           [ Pointer [Void], Int ]                 => Int;
+        affix 'user32', 'GetWindowThreadProcessId', [ Pointer [Void], Pointer [UInt] ]      => UInt;
+        affix 'user32', 'GetSysColorBrush',         [Int]                                   => Pointer [Void];
+        typedef UDACCEL => Struct [ nSec => UInt, nInc => UInt ];
         my $icc   = malloc( sizeof( INITCOMMONCONTROLSEX() ) );
         my $icc_s = cast( $icc, INITCOMMONCONTROLSEX() );
         $icc_s->{dwSize} = sizeof( INITCOMMONCONTROLSEX() );
-        $icc_s->{dwICC}  = 0x00000004;                         # ICC_BAR_CLASSES (includes trackbars)
+        $icc_s->{dwICC}  = 0x00000025;                         # ICC_UPDOWN_CLASS (0x1) | ICC_BAR_CLASSES (0x4) | ICC_PROGRESS_CLASS (0x20)
         InitCommonControlsEx($icc);
         free($icc);
     }
@@ -103,9 +141,12 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 if ($record) {
                     my $node = $record->{node};
 
-                    # BN_CLICKED (0) -> Button click
+                    # BN_CLICKED (0) -> Button click. on_click is dispatched: a static message
+                    # hashref is put verbatim; a callback is invoked and its return value is put.
                     if ( $notify_code == 0 && $node->can('on_click') && $node->on_click ) {
-                        $self_ref->channel->put( $node->on_click );
+                        my $on_click = $node->on_click;
+                        my $action   = ref $on_click eq ref {} ? $on_click : $on_click->();
+                        $self_ref->channel->put($action) if $action;
                     }
 
                     # BN_CLICKED (0) -> Checkbox toggle: read the actual state back from the control
@@ -129,6 +170,51 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                         my $text       = $self_ref->_get_text( $record->{hwnd} );
                         my $action_msg = $node->on_input->($text);
                         $self_ref->channel->put($action_msg) if $action_msg;
+                    }
+
+                    # CBN_EDITCHANGE (5) -> user typed in an editable combo box
+                    elsif ( $notify_code == 0x0005 && $node->type eq 'combo_box' && $node->on_input ) {
+
+                        # Ignore if triggered programmatically (SetWindowTextW / CB_SETCURSEL)
+                        return DefWindowProcW( $hwnd, $msg, $wparam, $lparam ) if $self_ref->_is_suppressed;
+                        my $text       = $self_ref->_get_text( $record->{hwnd} );
+                        my $action_msg = $node->on_input->($text);
+                        $self_ref->channel->put($action_msg) if $action_msg;
+                    }
+
+                    # CBN_SELCHANGE (1) / LBN_SELCHANGE (1) -> user picked a list item
+                    elsif ( $notify_code == 0x0001 && ( $node->type eq 'combo_box' || $node->type eq 'list_box' ) && $node->on_select ) {
+
+                        # Multi-select list: report the set of selected option values as an arrayref.
+                        if ( $node->type eq 'list_box' && $node->multiple ) {
+                            my $cnt = SendMessageW( $record->{hwnd}, 0x0190, 0, 0 );    # LB_GETSELCOUNT
+                            my @values;
+                            if ( $cnt > 0 ) {
+                                my $buf = malloc( $cnt * 4 );
+                                SendMessageW( $record->{hwnd}, 0x0191, $cnt, Affix::address($buf) );    # LB_GETSELITEMS
+                                my @idx = unpack( "V$cnt", Affix::raw( $buf, $cnt * 4 ) );
+                                free($buf);
+                                @values = map { $node->options->[$_]{value} // $node->options->[$_]{label} // '' } @idx;
+                            }
+                            my $action_msg = $node->on_select->( \@values );
+                            $self_ref->channel->put($action_msg) if $action_msg;
+                        }
+                        else {
+                            my $is_combo = $node->type eq 'combo_box';
+                            my $idx      = SendMessageW( $record->{hwnd}, $is_combo ? 0x0147 : 0x0188, 0, 0 );    # CB_GETCURSEL / LB_GETCURSEL
+                            my $value;
+                            if ( $idx >= 0 ) {
+                                $value = $node->options->[$idx]{value} // $node->options->[$idx]{label} // '';
+                            }
+                            elsif ( $is_combo && $node->editable ) {
+                                $value = $self_ref->_get_text( $record->{hwnd} );                                 # typed text not in the list
+                            }
+                            else {
+                                $value = '';
+                            }
+                            my $action_msg = $node->on_select->($value);
+                            $self_ref->channel->put($action_msg) if $action_msg;
+                        }
                     }
                 }
             }
@@ -181,6 +267,60 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                     }
                 }
             }
+            elsif ( $msg == 0x0115 ) {    # WM_VSCROLL -> vertical slider thumb (lParam = trackbar HWND) OR
+
+                # spin box up/down arrow (lParam = buddy HWND)
+                my $vscroll_hwnd = $lparam;
+
+                # A vertical TBS_VERT trackbar posts WM_VSCROLL with lParam = its own hwnd.
+                my $record = $self_ref->_get_registry_by_hwnd($vscroll_hwnd);
+                if ( $record && $record->{node} && $record->{node}->type eq 'slider' ) {
+                    my $node = $record->{node};
+                    if ( $node->can('on_change') && $node->on_change ) {
+                        my $pos = SendMessageW( $vscroll_hwnd, 0x0400, 0, 0 );    # TBM_GETPOS
+                        my $msg = $node->on_change->($pos);
+                        $self_ref->channel->put($msg) if $msg;
+                    }
+                    return 0;
+                }
+
+                # Otherwise a spin box arrow: lParam = the msctls_updown32 buddy.
+                $record = $self_ref->_get_registry_by_aux($vscroll_hwnd);
+                if ($record) {
+                    my $node = $record->{node};
+                    my $pos  = SendMessageW( $vscroll_hwnd, 0x0472, 0, 0 );    # UDM_GETPOS32
+                    $self_ref->_spin_sync_text( $record->{hwnd}, $pos );
+                    if ( $node->can('on_change') && $node->on_change ) {
+                        my $msg = $node->on_change->($pos);
+                        $self_ref->channel->put($msg) if $msg;
+                    }
+                }
+            }
+
+            # WM_CTLCOLORSTATIC (0x0138) / WM_CTLCOLOREDIT (0x0133) / WM_CTLCOLORBTN (0x0135):
+            # Return a brush + set text/background colours for the child control. We must NOT
+            # fall through to DefWindowProc here: DefWindowProc restores the DC's text/background
+            # colours to system defaults, silently discarding our SetTextColor/SetBkColor.
+            elsif ( $msg == 0x0138 || $msg == 0x0133 || $msg == 0x0135 ) {
+                my $child_hwnd = $lparam;
+                my $record     = $self_ref->_get_registry_by_hwnd($child_hwnd);
+                if ( $record && $record->{node} ) {
+                    my $node = $record->{node};
+                    my $hdc  = $wparam;
+                    if ( $node->color ) {
+                        SetTextColor( $hdc, $self_ref->_parse_color( $node->color ) );
+                    }
+                    if ( $node->background ) {
+                        SetBkColor( $hdc, $self_ref->_parse_color( $node->background ) );
+                        return $self_ref->_get_brush( $node->background );
+                    }
+                }
+
+                # No explicit background: return the same system brush DefWindowProc would
+                # (COLOR_WINDOW for edits, COLOR_BTNFACE for statics/buttons) without touching
+                # the DC, so the SetTextColor above is preserved.
+                return GetSysColorBrush( $msg == 0x0133 ? 5 : 15 );    # COLOR_WINDOW / COLOR_BTNFACE
+            }
             return DefWindowProcW( $hwnd, $msg, $wparam, $lparam );
         };
         my $wndclass = malloc( sizeof( WNDCLASSEXW() ) );
@@ -208,7 +348,150 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         free($buf);
 
         # Decode directly to Perl UTF-8 without touching C pointer types
-        return Encode::decode( 'UTF-16LE', $raw_bytes );
+        return $self->_to_lf( Encode::decode( 'UTF-16LE', $raw_bytes ) );
+    }
+
+    # Native edit controls / the clipboard use CRLF line endings; the model's canonical form is
+    # bare LF. Convert LF -> CRLF before writing so a multi-line value ("one\n two\n") shows real
+    # line breaks (a bare LF alone renders as one line), and CRLF -> LF when reading back so the
+    # model round-trip and the set_prop comparison stay LF-only.
+    method _to_crlf ($string) {
+        $string //= '';
+        $string =~ s/\r?\n/\r\n/g;
+        return $string;
+    }
+
+    method _to_lf ($string) {
+        $string =~ s/\r\n/\n/g;
+        return $string;
+    }
+
+    # Native progress bars render fills for the given position with no clipping, so a model value
+    # outside the control's range would draw a bar "over 100%". Clamp to the declared range so a
+    # progress bar can never visually exceed its max.
+    method _clamp_to_range ($vnode, $value) {
+        my $min = defined $vnode->min ? $vnode->min : 0;
+        my $max = defined $vnode->max ? $vnode->max : 100;
+        $value = $min if $value < $min;
+        $value = $max if $value > $max;
+        return $value;
+    }
+
+    # Convert '#RRGGBB' to a Win32 COLORREF (0x00BBGGRR  note reversed byte order).
+    sub _parse_color ( $self, $hex ) {
+        $hex =~ s/^#//;
+        my $rgb = hex $hex;
+        return ( ( $rgb & 0xFF ) << 16 ) | ( $rgb & 0x00FF00 ) | ( ( $rgb >> 16 ) & 0xFF );
+    }
+
+    # Lazily create and cache a solid brush for a '#RRGGBB' colour string.
+    method _get_brush ($hex) {
+        return undef unless defined $hex;
+        return $brush_cache->{$hex} if $brush_cache->{$hex};
+        my $brush = CreateSolidBrush( $self->_parse_color($hex) );
+        $brush_cache->{$hex} = $brush if $brush;
+        return $brush;
+    }
+
+    # Lazily create and cache an HFONT for a given face name and point size. Uses the same
+    # LOGFONTW struct as CreateFontIndirectW. Height is calculated as -MulDiv(pointsize, dpi, 72).
+    # We use a default DPI of 96; a proper DPI-aware version would call GetDeviceCaps.
+    method _get_font ( $name, $size ) {
+        $name //= 'Segoe UI';
+        $size //= 9;
+        my $key = "$name|$size";
+        return $font_cache->{$key} if $font_cache->{$key};
+        my $lf_ptr = malloc( sizeof( LOGFONTW() ) );
+        my $lf     = cast( $lf_ptr, LOGFONTW() );
+        my $height = -int( $size * 96 / 72 );                                       # negative = character height
+        $lf->{lfHeight}         = $height;
+        $lf->{lfWeight}         = 400;                                              # FW_NORMAL
+        $lf->{lfCharSet}        = 1;                                                # DEFAULT_CHARSET
+        $lf->{lfOutPrecision}   = 4;                                                # OUT_TT_PRECIS
+        $lf->{lfQuality}        = 5;                                                # CLEARTYPE_QUALITY
+        $lf->{lfPitchAndFamily} = 0x12;                                             # FF_SWISS | VARIABLE_PITCH
+        my $wide_name = Encode::encode( 'UTF-16LE', $name ) . "\x00\x00";           # face name + NUL terminator
+        my $face      = ptr_add( $lf_ptr, offsetof( LOGFONTW(), 'lfFaceName' ) );
+        memcpy( $face, $wide_name, CORE::length($wide_name) );
+        my $hfont = CreateFontIndirectW($lf_ptr);
+        free($lf_ptr);
+        $font_cache->{$key} = $hfont if $hfont;
+        return $hfont;
+    }
+
+    # Destroy the native control (and any auxiliary controls like a spin buddy) and remount the
+    # node from scratch. Used when a mount-time-only prop (multiline, orientation, align) changes.
+    method recreate_node ( $old_id, $new_node ) {
+        my $old    = $registry->{$old_id} or return;
+        my $parent = $old->{parent_hwnd} // $main_hwnd;
+
+        # Destroy the auxiliary control first (e.g. spin buddy).
+        DestroyWindow( $old->{aux} ) if $old->{aux};
+
+        # Destroy the primary HWND.
+        DestroyWindow( $old->{hwnd} ) if $old->{hwnd};
+
+        # Transfer the ID to the fresh node and remount it.
+        $new_node->set_id($old_id);
+        $self->_mount_node( $new_node, $parent );
+
+        # Apply the computed layout bounds immediately.
+        if ( $registry->{$old_id} && $registry->{$old_id}{hwnd} ) {
+            SetWindowPos( $registry->{$old_id}{hwnd}, undef, $new_node->bx, $new_node->by, $new_node->bw, $new_node->bh, 0x0004 );
+        }
+    }
+
+    # Current caret/selection (as character offsets) of an editable combo's edit control.
+    # CB_GETEDITSEL returns them packed as (start | end << 16).
+    # Find a top-level window of UjiWindowClass by its title (used by probes for introspection).
+    method _find_window ($title) {
+        return FindWindowW( 'UjiWindowClass', '' . $title );
+    }
+
+    # List of child HWNDs of a window (via GW_CHILD + GW_HWNDNEXT).
+    method _child_windows ($parent) {
+        my $first = GetWindow( $parent, 5 );
+        return () unless $first;
+        my @kids;
+        my $h = $first;
+        while ($h) {
+            push @kids, $h;
+            $h = GetWindow( $h, 2 );
+        }
+        return @kids;
+    }
+
+    # Class name of a window (wide buffer).
+    method _get_class ($hwnd) {
+        my $buf = malloc( 256 * sizeof(WChar) );
+        my $n   = GetClassNameW( $hwnd, $buf, 256 );
+        my $raw = Affix::raw( $buf, $n * sizeof(WChar) );
+        free($buf);
+        return Encode::decode( 'UTF-16LE', $raw );
+    }
+
+    # GWL_STYLE of a window.
+    method _get_style ($hwnd) {
+        return GetWindowLongW( $hwnd, -16 );
+    }
+
+    # Process ID that owns a window.
+    method _window_pid ($hwnd) {
+        my $pid_ptr = malloc( sizeof(UInt) );
+        GetWindowThreadProcessId( $hwnd, $pid_ptr );
+        my $pid = $self->_peek_u32($pid_ptr);
+        free($pid_ptr);
+        return $pid;
+    }
+
+    method _peek_u32 ($ptr) {
+        my $raw = Affix::raw( $ptr, 4 );
+        return CORE::unpack( 'V', $raw );
+    }
+
+    method _edit_selection ($hwnd) {
+        my $packed = SendMessageW( $hwnd, 0x0140, 0, 0 );    # CB_GETEDITSEL
+        return ( ( $packed & 0xFFFF ), ( $packed >> 16 ) & 0xFFFF );
     }
     method _get_registry_record ($id) { $registry->{$id} }
 
@@ -217,6 +500,16 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             my $rec = $registry->{$id};
             next unless defined $rec->{hwnd};    # containers (radio_group) have no HWND
             return $rec if $rec->{hwnd} == $hwnd;
+        }
+        return undef;
+    }
+
+    # Registry record whose companion "aux" control (spin box's up/down buddy) matches $hwnd.
+    method _get_registry_by_aux ($hwnd) {
+        for my $id ( keys %$registry ) {
+            my $rec = $registry->{$id};
+            next unless defined $rec->{aux};
+            return $rec if $rec->{aux} == $hwnd;
         }
         return undef;
     }
@@ -380,6 +673,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             DispatchMessageW($msg_ptr);
         }
         free($msg_ptr);
+        $self->_repaint_active_spin_arrows;
     }
 
     method _mount_node ( $vnode, $parent_hwnd ) {
@@ -390,34 +684,75 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $initial_text = $vnode->label // '';
         }
         elsif ( $vnode->type eq 'text' ) {
-            $class        = 'STATIC';
-            $style        = 0x50000000;            # WS_CHILD | WS_VISIBLE
+            $class = 'STATIC';
+            $style = 0x50000000;                                                                          # WS_CHILD | WS_VISIBLE
+            $style |= $vnode->align eq 'center' ? 0x0001 : $vnode->align eq 'right' ? 0x0002 : 0x0000;    # SS_CENTER / SS_RIGHT / SS_LEFT
             $initial_text = $vnode->label // '';
         }
         elsif ( $vnode->type eq 'text_input' ) {
             $class = 'EDIT';
 
-            # WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL
+            # WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL for single-line (0x50800080);
+            # multiline adds WS_VSCROLL | WS_TABSTOP | ES_MULTILINE (0x0004) | ES_AUTOVSCROLL
+            # (0x0040) and drops ES_AUTOHSCROLL (0x50A10044).
             $style        = 0x50800080;
-            $initial_text = $vnode->value // '';
+            $style        = 0x50A10044 if $vnode->multiline;
+            $initial_text = $self->_to_crlf( $vnode->value // '' );
+        }
+        elsif ( $vnode->type eq 'multiline_text' ) {
+            $class = 'EDIT';
+
+            # WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | WS_TABSTOP | ES_MULTILINE |
+            # ES_AUTOVSCROLL. WS_TABSTOP so Tab moves focus, not inserts '\t'.
+            $style        = 0x50A10044;
+            $initial_text = $self->_to_crlf( $vnode->value // '' );
         }
         elsif ( $vnode->type eq 'password' ) {
             $class = 'EDIT';
 
             # WS_CHILD | WS_VISIBLE | WS_BORDER | ES_PASSWORD | ES_AUTOHSCROLL
             $style        = 0x508000A0;
-            $initial_text = $vnode->value // '';
+            $initial_text = $self->_to_crlf( $vnode->value // '' );
         }
         elsif ( $vnode->type eq 'slider' ) {
             $class = 'msctls_trackbar32';
 
-            # WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS | TBS_HORZ
+            # WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS (0x1) | TBS_HORZ (0x0) or TBS_VERT (0x80)
+            $style = 0x50000001 | ( $vnode->orientation eq 'vertical' ? 0x0080 : 0x0000 );
+        }
+        elsif ( $vnode->type eq 'spin_box' ) {
+            $class = 'EDIT';
+
+            # WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_READONLY (0x0800) | ES_AUTOHSCROLL.
+            # Read-only: the driver owns the text (_spin_sync_text on mount / set_prop / WM_VSCROLL).
+            $style        = 0x50800880;
+            $initial_text = '' . ( $vnode->value // 0 );
+        }
+        elsif ( $vnode->type eq 'progress_bar' ) {
+            $class = 'msctls_progress32';
+
+            # WS_CHILD | WS_VISIBLE | PBS_SMOOTH (0x1)
             $style = 0x50000001;
+        }
+        elsif ( $vnode->type eq 'toggle_switch' || $vnode->type eq 'toggle_button' ) {
+            $class = 'BUTTON';
+
+            # WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX (0x3  toggles itself on click) | BS_PUSHLIKE (0x1000  pushed-in look)
+            $style        = 0x50001003;
+            $initial_text = $vnode->label // '';
+        }
+        elsif ( $vnode->type eq 'link_button' ) {
+            $class = 'BUTTON';
+
+            # WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_FLAT (0x8000  edge-less "link" look,
+            # still a real click target that posts BN_CLICKED)
+            $style        = 0x50008000;
+            $initial_text = $vnode->label // '';
         }
         elsif ( $vnode->type eq 'checkbox' ) {
             $class = 'BUTTON';
 
-            # WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX (0x3 — the auto variety:
+            # WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX (0x3  the auto variety:
             # the button toggles itself on click; BS_CHECKBOX (0x2) never does).
             $style        = 0x50000003;
             $initial_text = $vnode->label // '';
@@ -425,11 +760,30 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         elsif ( $vnode->type eq 'radio' ) {
             $class = 'BUTTON';
 
-            # WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON (0x9 — auto: clicking one
+            # WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON (0x9  auto: clicking one
             # checks it and clears the group; BS_RADIOBUTTON (0x4) never does).
             # (+ WS_GROUP on the first of a group)
             $style        = $vnode->first ? 0x50020009 : 0x50000009;
             $initial_text = $vnode->label // '';
+        }
+        elsif ( $vnode->type eq 'combo_box' ) {
+            $class = 'COMBOBOX';
+
+            # WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | CBS_HASSTRINGS (0x200  the
+            # control copies the strings we add, so items render/text-read back correctly)
+            # plus CBS_DROPDOWNLIST (0x3) or CBS_DROPDOWN (0x2) for the editable variety.
+            # The window height (laid out) becomes field height + dropped list extent.
+            $style = 0x50210200 | ( $vnode->editable ? 0x0002 : 0x0003 );
+        }
+        elsif ( $vnode->type eq 'list_box' ) {
+            $class = 'LISTBOX';
+
+            # WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | WS_TABSTOP
+            # | LBS_NOTIFY (0x1  post WM_COMMAND on change)
+            # | LBS_NOINTEGRALHEIGHT (0x100  exact height)
+            # | LBS_HASSTRINGS (0x40  store/copy + render the added strings properly)
+            # | LBS_MULTIPLESEL (0x8  toggle multi-selection when requested)
+            $style = 0x50A10141 | ( $vnode->multiple ? 0x0008 : 0 );
         }
         else {
             $self->_mount_node( $_, $parent_hwnd ) for @{ $vnode->children };
@@ -441,21 +795,26 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         }
         my $hwnd = CreateWindowExW( 0, $class, $initial_text, $style, $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef,
             undef );
-        $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode };
+        $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode, parent_hwnd => $parent_hwnd };
 
         # Apply initial state for props that aren't baked into styles.
         EnableWindow( $hwnd, $vnode->enabled ? 1 : 0 );
         ShowWindow( $hwnd, $vnode->visible   ? 5 : 0 );
         $self->_set_tooltip( $hwnd, $vnode->tooltip ) if defined $vnode->tooltip;
-        if ( $vnode->type eq 'text_input' || $vnode->type eq 'password' ) {
+
+        # Colours and font (all widgets): the parent wndproc answers WM_CTLCOLOR* from the node's
+        # color/background; WM_SETFONT switches the glyph source.
+        $self->_set_font( $hwnd, $vnode->font, $vnode->font_size ) if $vnode->font || $vnode->font_size;
+        if ( $vnode->type eq 'text_input' || $vnode->type eq 'password' || $vnode->type eq 'multiline_text' ) {
+            $self->_set_placeholder( $hwnd, $vnode->placeholder ) if defined $vnode->placeholder;
             SendMessageW( $hwnd, 0x00CF, $vnode->readonly ? 1 : 0, 0 );                  # EM_SETREADONLY
             SendMessageW( $hwnd, 0x00C5, $vnode->maxlength, 0 ) if $vnode->maxlength;    # EM_LIMITTEXT
             SetFocus($hwnd) if $vnode->focused;
         }
         if ( $vnode->type eq 'slider' ) {
 
-            # TBM_SETRANGE (0x0406): (max << 16) | min, wParam = redraw
-            SendMessageW( $hwnd, 0x0406, 1, ( $vnode->max << 16 ) | $vnode->min );
+            # TBM_SETRANGE (0x0401): (max << 16) | min, wParam = redraw
+            SendMessageW( $hwnd, 0x0401, 1, ( $vnode->max << 16 ) | $vnode->min );
             SendMessageW( $hwnd, 0x0405, 1, $vnode->value );                             # TBM_SETPOS
             SendMessageW( $hwnd, 0x041C, 1, $vnode->step );                              # TBM_SETLINESIZE
             SendMessageW( $hwnd, 0x041D, 1, $vnode->step );                              # TBM_SETPAGESIZE
@@ -463,9 +822,192 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         if ( $vnode->type eq 'checkbox' ) {
             SendMessageW( $hwnd, 0x00F1, $vnode->checked ? 1 : 0, 0 );                   # BM_SETCHECK
         }
-        if ( $vnode->type eq 'radio' ) {
-            SendMessageW( $hwnd, 0x00F1, $vnode->selected ? 1 : 0, 0 );                  # BM_SETCHECK
+        if ( $vnode->type eq 'toggle_switch' || $vnode->type eq 'toggle_button' ) {
+            SendMessageW( $hwnd, 0x00F1, $vnode->checked ? 1 : 0, 0 );                   # BM_SETCHECK
         }
+        if ( $vnode->type eq 'spin_box' ) {
+            $self->_mount_spin_buddy( $parent_hwnd, $vnode );
+        }
+        if ( $vnode->type eq 'progress_bar' ) {
+
+            # PBM_SETRANGE32 (0x0406) takes wParam = min and lParam = max as SEPARATE values
+            # (NOT packed like the trackbar). Packing them made the range 0..6,553,600 and the
+            # bar never filled.
+            SendMessageW( $hwnd, 0x0406, $vnode->min,   $vnode->max );                     # PBM_SETRANGE32
+            SendMessageW( $hwnd, 0x0402, $self->_clamp_to_range( $vnode, $vnode->value ), 0 );    # PBM_SETPOS
+        }
+        if ( $vnode->type eq 'radio' ) {
+            SendMessageW( $hwnd, 0x00F1, $vnode->selected ? 1 : 0, 0 );    # BM_SETCHECK
+        }
+        if ( $vnode->type eq 'password' && defined $vnode->password_char ) {
+            SendMessageW( $hwnd, 0x00CC, CORE::ord( $vnode->password_char ), 0 );    # EM_SETPASSWORDCHAR
+        }
+        if ( $vnode->type eq 'combo_box' || $vnode->type eq 'list_box' ) {
+            $self->_populate_strings( $hwnd, $vnode );
+        }
+    }
+
+    # WM_SETFONT(0x0030): switch a control to a cached HFONT built from face name + point size.
+    # Non-destructive: controls keep their own HFONT until explicitly replaced.
+    method _set_font ( $hwnd, $name, $size ) {
+        return unless $hwnd;
+        my $hfont = $self->_get_font( $name, $size );
+        SendMessageW( $hwnd, 0x0030, $hfont, 1 ) if $hfont;    # WM_SETFONT (redraw = 1)
+    }
+
+    # EM_SETCUEBANNER (0x1501): grey placeholder text shown while the edit is empty. The cue is
+    # automatic  it appears whenever the control holds no text and hides once the user types.
+    method _set_placeholder ( $hwnd, $text ) {
+        return unless $hwnd;
+        my $wide = Encode::encode( 'UTF-16LE', $text );
+        my $buf  = malloc( CORE::length($wide) + 2 );
+        memcpy( $buf, $wide, CORE::length($wide) );
+        SendMessageW( $hwnd, 0x1501, 1, Affix::address($buf) );    # EM_SETCUEBANNER (show when empty)
+        free($buf);
+    }
+
+    # Create the up/down buddy control for a spin box: an UPDOWN that overlays the right edge of
+    # the box's EDIT (the node's primary HWND) and owns the numeric range/position. The edit text
+    # is not auto-synced (UDS_SETBUDDYINT's lazy WM_SETTEXT into a read-only edit is a crash risk
+    # and re-entrancy trap), so the driver writes the text whenever it moves the position:
+    # mount, set_prop('value'), and the WM_VSCROLL handler after an arrow tap. The buddy HWND is
+    # stashed in the registry record as `aux`.
+    method _mount_spin_buddy ( $parent_hwnd, $vnode ) {
+        my $cxv     = GetSystemMetrics(2);    # SM_CXVSCROLL
+        my $edit_bw = $vnode->bw - $cxv;
+
+        # Classic Win32 spin layout: the EDIT must NOT extend under the up/down buttons. When the
+        # buddy overlapped the edit, the edit sat over the buddy in the parent's z-order and its
+        # caret stayed "in front"  arrow clicks were swallowed by the edit and never reached the
+        # buddy (Windows hit-testing). Shrink the edit to width bw-cxv; the buddy owns the right strip.
+        SetWindowPos( $registry->{ $vnode->id }{hwnd}, undef, $vnode->bx, $vnode->by, $edit_bw, $vnode->bh, 0x0004 );
+        my $up = CreateWindowExW(
+            0, 'msctls_updown32', undef,
+
+            # WS_CHILD | WS_VISIBLE | UDS_ARROWKEYS (0x20)
+            0x50000020, $vnode->bx + $edit_bw, $vnode->by, $cxv, $vnode->bh, $parent_hwnd, 0, undef, undef
+        );
+        EnableWindow( $up, $vnode->enabled ? 1 : 0 );
+        ShowWindow( $up, $vnode->visible   ? 5 : 0 );
+        return unless $up;
+        $registry->{ $vnode->id }{aux} = $up;
+        SendMessageW( $up, 0x046F, 0, ( $vnode->max << 16 ) | $vnode->min );    # UDM_SETRANGE32
+        SendMessageW( $up, 0x0471, 0, $vnode->value );                          # UDM_SETPOS32
+        $self->_spin_set_step( $up, $vnode->step ) if $vnode->step != 1;
+
+        # The up-down only paints its arrow glyphs when it reprocesses WM_PAINT, which under a
+        # poll-based pump is timing-fragile (mount/hover/click can leave the face blank). Paint
+        # it deterministically right here so the arrows are visible from the moment it mounts.
+        InvalidateRect( $up, undef, 0 );
+        UpdateWindow($up);
+    }
+
+    # The up-down's own hot-track / click repaints erase its arrow glyphs under the poll pump
+    # (verified in eg/spin_bisect_probe.pl: an explicit InvalidateRect+UpdateWindow always draws
+    # the arrows). Repaint any spin-up-down the cursor is currently over on every poll tick, and
+    # once more on the cursor-exit transition, so the arrows are always rendered.
+    method _repaint_active_spin_arrows () {
+        for my $id ( keys %{$registry} ) {
+            my $rec = $registry->{$id};
+            next unless $rec && $rec->{node} && $rec->{node}->type eq 'spin_box' && $rec->{aux};
+            my $up    = $rec->{aux};
+            my $wrect = malloc( sizeof( RECT() ) );
+            GetWindowRect( $up, $wrect );
+            my $r  = cast( $wrect, RECT() );
+            my $pt = malloc( sizeof( POINT() ) );
+            GetCursorPos($pt);
+            my $p    = cast( $pt, POINT() );
+            my $over = ( $p->{x} >= $r->{left} && $p->{x} < $r->{right} && $p->{y} >= $r->{top} && $p->{y} < $r->{bottom} );
+            free($wrect);
+            free($pt);
+            my $was_over = $rec->{aux_over} || 0;
+            $rec->{aux_over} = $over ? 1 : 0;
+
+            if ( $over || $was_over ) {    # hovered, or just exited: deterministic arrow repaint
+                InvalidateRect( $up, undef, 0 );
+                UpdateWindow($up);
+            }
+        }
+    }
+
+    # Keep the spin box's edit text in sync with the buddy position. Suppressed so the edit's
+    # EN_CHANGE (fired by the SetWindowTextW) is not mistaken for user typing.
+    method _spin_sync_text ( $edit_hwnd, $value ) {
+        $suppress_events = 1;
+        SetWindowTextW( $edit_hwnd, '' . ( $value // 0 ) );
+        $suppress_events = 0;
+
+        # SetWindowTextW snaps the caret to 0; park it at the end like a read-only readout.
+        my $len = CORE::length( '' . ( $value // 0 ) );
+        SendMessageW( $edit_hwnd, 0x00B1, $len, $len );    # EM_SETSEL
+    }
+
+    # Make each up/down arrow click change the value by $step. The up-down control copies the
+    # accelerator table, so the temp buffer is freed right after the call.
+    method _spin_set_step ( $hwnd, $step ) {
+        return if $step <= 1;
+        my $buf = malloc( sizeof( UDACCEL() ) );
+        my $ud  = cast( $buf, UDACCEL() );
+        $ud->{nSec} = 0;                                           # apply immediately on the first click
+        $ud->{nInc} = $step;
+        SendMessageW( $hwnd, 0x046B, 1, Affix::address($buf) );    # UDM_SETACCEL
+        free($buf);
+    }
+
+    # Fill a combo box or list box with its options and restore the selected value.
+    #
+    # Each item string is handed to the native control as a UTF-16 buffer address. The control
+    # may reference those buffers lazily, so the malloc'd buffers are pinned (kept alive) until
+    # the next populate for the same HWND, and freed there (the control must have copied by then,
+    # since re-populate begins with RESETCONTENT).
+    method _populate_strings ( $hwnd, $vnode ) {
+        my $is_combo = $vnode->type eq 'combo_box';
+        my $clear    = $is_combo ? 0x014B : 0x0184;    # CB_RESETCONTENT / LB_RESETCONTENT
+        my $add      = $is_combo ? 0x0143 : 0x0180;    # CB_ADDSTRING / LB_ADDSTRING
+        my $set      = $is_combo ? 0x014E : 0x0186;    # CB_SETCURSEL / LB_SETCURSEL
+        free($_) for @{ $item_pins->{$hwnd} // [] };
+        my @pins;
+        for my $opt ( @{ $vnode->options } ) {
+            my $text = '' . ( $opt->{label} // $opt->{value} // '' );
+            my $wide = Encode::encode( 'UTF-16LE', $text );             # appends a NUL terminator
+            my $buf  = malloc( CORE::length($wide) + 2 );
+            memcpy( $buf, $wide, CORE::length($wide) );
+            push @pins, $buf;
+            SendMessageW( $hwnd, $add, 0, Affix::address($buf) );
+        }
+        $item_pins->{$hwnd} = \@pins;
+        if ( $vnode->type eq 'list_box' && $vnode->multiple ) {
+            $self->_set_multiselect( $hwnd, $vnode, $vnode->value );
+        }
+        else {
+            my $sel = $self->_option_index( $vnode, $vnode->value );
+            SendMessageW( $hwnd, $set, $sel >= 0 ? $sel : -1, 0 );
+        }
+    }
+
+    # (Re)apply a (possibly multiple) selection to a multi-select list box. $want is an arrayref
+    # of option values (or a scalar); the whole selection is cleared first.
+    method _set_multiselect ( $hwnd, $vnode, $want ) {
+        $want = [$want] unless ref $want eq 'ARRAY';
+        SendMessageW( $hwnd, 0x0185, 0, -1 );    # LB_SETSEL: clear all
+        my $i = 0;
+        for my $opt ( @{ $vnode->options } ) {
+            my $val = $opt->{value} // $opt->{label} // '';
+            if ( grep { ( $_ // '' ) eq $val } @$want ) {
+                SendMessageW( $hwnd, 0x0185, 1, $i );    # LB_SETSEL: select
+            }
+            $i++;
+        }
+    }
+
+    # Index of the option whose value matches $want (or -1 when absent).
+    method _option_index ( $node, $want ) {
+        my $i = 0;
+        for my $opt ( @{ $node->options } ) {
+            return $i if ( $opt->{value} // '' ) eq ( $want // '' );
+            $i++;
+        }
+        return -1;
     }
 
     method set_prop ( $vnode_id, $prop_name, $value ) {
@@ -505,6 +1047,18 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 SendMessageW( $record->{hwnd}, 0x0405, 1, $value );
                 return;
             }
+            if ( $record->{node}->type eq 'spin_box' ) {
+
+                # UDM_SETPOS32 moves the buddy; the edit text follows (the up/down control is
+                # not in UDS_SETBUDDYINT mode  the driver owns the text).
+                SendMessageW( $record->{aux}, 0x0471, 0, $value );
+                $self->_spin_sync_text( $record->{hwnd}, $value );
+                return;
+            }
+            if ( $record->{node}->type eq 'progress_bar' ) {
+                SendMessageW( $record->{hwnd}, 0x0402, $self->_clamp_to_range( $record->{node}, $value ), 0 );    # PBM_SETPOS
+                return;
+            }
             if ( $record->{node}->type eq 'radio_group' ) {
                 my $selected_radio = '';
                 for my $child ( @{ $record->{node}->children } ) {
@@ -519,24 +1073,60 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 }
                 return;
             }
+            if ( $record->{node}->type eq 'combo_box' || $record->{node}->type eq 'list_box' ) {
+                my $is_combo = $record->{node}->type eq 'combo_box';
 
-            # Only update if the native control differs (prevents typing cursor jump)
+                # Multi-select list: apply the whole set, not one cursor.
+                return $self->_set_multiselect( $record->{hwnd}, $record->{node}, $value ) if !$is_combo && $record->{node}->multiple;
+                my $sel = $is_combo ? 0x014E : 0x0186;                       # CB_SETCURSEL / LB_SETCURSEL
+                my $idx = $self->_option_index( $record->{node}, $value );
+                if ( $idx >= 0 ) {
+                    SendMessageW( $record->{hwnd}, $sel, $idx, 0 );
+                }
+                elsif ( $is_combo && $record->{node}->editable ) {
+
+                    # Skip the write when the edit already holds the same text so an in-progress
+                    # caret position is never disturbed by a re-render.
+                    my $cur = $self->_get_text( $record->{hwnd} );
+                    if ( $cur ne $value ) {
+
+                        # Remember the caret: SetWindowTextW snaps it to position 0, so restore
+                        # the previous caret/selection rather than assuming the end of the string.
+                        my ( $old_s, $old_e ) = $self->_edit_selection( $record->{hwnd} );
+                        $suppress_events = 1;
+                        SetWindowTextW( $record->{hwnd}, $value );
+                        $suppress_events = 0;
+                        SendMessageW( $record->{hwnd}, 0x0142, 0, ( $old_e << 16 ) | $old_s );
+                    }
+                }
+                else {
+                    SendMessageW( $record->{hwnd}, $sel, -1, 0 );
+                }
+                return;
+            }
+
+            # Only update if the native control differs (prevents typing cursor jump).
+            # _get_text returns LF-only text; native edits hold CRLF, so the write goes
+            # through _to_crlf and the caret parks at the natural end of the native string.
             my $current = $self->_get_text( $record->{hwnd} );
             if ( $current ne $value ) {
+                my $native = $self->_to_crlf($value);
                 $suppress_events = 1;
-                SetWindowTextW( $record->{hwnd}, $value );
+                SetWindowTextW( $record->{hwnd}, $native );
                 $suppress_events = 0;
 
                 # SetWindowTextW snaps the caret to position 0; move it to the end.
-                my $len = length $value;
+                my $len = CORE::length $native;
                 SendMessageW( $record->{hwnd}, 0x00B1, $len, $len );
             }
         }
         elsif ( $prop_name eq 'enabled' ) {    # all widgets
             EnableWindow( $record->{hwnd}, $value ? 1 : 0 );
+            EnableWindow( $record->{aux},  $value ? 1 : 0 ) if $record->{node}->type eq 'spin_box';
         }
         elsif ( $prop_name eq 'visible' ) {    # all widgets
             ShowWindow( $record->{hwnd}, $value ? 5 : 0 );
+            ShowWindow( $record->{aux},  $value ? 5 : 0 ) if $record->{node}->type eq 'spin_box';
         }
         elsif ( $prop_name eq 'focused' ) {    # text_input / password
             SetFocus( $record->{hwnd} ) if $value;
@@ -552,20 +1142,57 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             return unless $record->{node}->can('value');
             SendMessageW( $record->{hwnd}, 0x00C5, $value, 0 );
         }
-        elsif ( $prop_name eq 'step' ) {         # slider: TBM_SETLINESIZE / TBM_SETPAGESIZE
-            return unless $record->{node}->type eq 'slider';
+        elsif ( $prop_name eq 'placeholder' ) {    # text_input / password / multiline_text: EM_SETCUEBANNER
+            return unless $record->{node}->can('value');
+            $self->_set_placeholder( $record->{hwnd}, $value );
+        }
+        elsif ( $prop_name eq 'password_char' ) {    # password: EM_SETPASSWORDCHAR
+            return unless $record->{node}->type eq 'password';
+            SendMessageW( $record->{hwnd}, 0x00CC, defined $value && length $value ? CORE::ord($value) : 0, 0 );
+        }
+        elsif ( $prop_name eq 'font' || $prop_name eq 'font_size' ) {    # all widgets: WM_SETFONT
+            my $name = $prop_name eq 'font'      ? $value : $record->{node}->font;
+            my $size = $prop_name eq 'font_size' ? $value : $record->{node}->font_size;
+            $self->_set_font( $record->{hwnd}, $name, $size );
+        }
+        elsif ( $prop_name eq 'color' || $prop_name eq 'background' ) {    # all widgets: recolor via WM_CTLCOLOR*
+
+            # No action needed -- the parent wndproc reads these prop values directly when the
+            # control next paints (WM_CTLCOLORSTATIC/EDIT/BTN), so we force a repaint.
+            InvalidateRect( $record->{hwnd}, undef, 1 );
+        }
+        elsif ( $prop_name eq 'step' ) {    # slider / spin_box
+            my $t = $record->{node}->type;
+            return unless $t eq 'slider' || $t eq 'spin_box';
+            if ( $t eq 'spin_box' ) {
+                return $self->_spin_set_step( $record->{aux}, $value );
+            }
             SendMessageW( $record->{hwnd}, 0x041C, 1, $value );
             SendMessageW( $record->{hwnd}, 0x041D, 1, $value );
         }
-        elsif ( $prop_name eq 'checked' ) {      # checkbox: BM_SETCHECK
-            return unless $record->{node}->type eq 'checkbox';
+        elsif ( $prop_name eq 'checked' ) {    # checkbox / toggle_switch / toggle_button: BM_SETCHECK
+            my $t = $record->{node}->type;
+            return unless $t eq 'checkbox' || $t eq 'toggle_switch' || $t eq 'toggle_button';
             SendMessageW( $record->{hwnd}, 0x00F1, $value ? 1 : 0, 0 );
         }
+        elsif ( $prop_name eq 'options' ) {    # combo_box / list_box: rebuild item strings + reselect
+            return unless $record->{node}->type eq 'combo_box' || $record->{node}->type eq 'list_box';
+            $self->_populate_strings( $record->{hwnd}, $record->{node} );
+        }
         elsif ( $prop_name eq 'min' || $prop_name eq 'max' ) {
-            return unless $record->{node}->type eq 'slider';
+            my $t = $record->{node}->type;
+            return unless $t eq 'slider' || $t eq 'spin_box' || $t eq 'progress_bar';
             my $min = $prop_name eq 'min' ? $value : $record->{node}->min;
             my $max = $prop_name eq 'max' ? $value : $record->{node}->max;
-            SendMessageW( $record->{hwnd}, 0x0406, 1, ( $max << 16 ) | $min );
+            if ( $t eq 'progress_bar' ) {
+                SendMessageW( $record->{hwnd}, 0x0406, $min, $max );    # PBM_SETRANGE32: wParam=min, lParam=max
+            }
+            elsif ( $t eq 'slider' ) {
+                SendMessageW( $record->{hwnd}, 0x0401, 1, ( $max << 16 ) | $min );    # TBM_SETRANGE
+            }
+            else {
+                SendMessageW( $record->{aux} || $record->{hwnd}, 0x046F, 0, ( $max << 16 ) | $min );    # UDM_SETRANGE32
+            }
         }
     }
 
@@ -575,6 +1202,14 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         #print $lfh "  MOVE id=$vnode_id rec=", ( $record ? sprintf( "hwnd=%s", $record->{hwnd} ) : 'none' ), " xywh=($x,$y,$w,$h)\n";
         return unless $record && $record->{hwnd};    # containers have no HWND
         SetWindowPos( $record->{hwnd}, undef, $x, $y, $w, $h, 0x0004 );
+
+        # A spin box's edit and its up/down buddy sit side by side (EDIT = w-cxv, buddy = right strip),
+        # so each follows the move keeping that split.
+        if ( $record->{node} && $record->{node}->type eq 'spin_box' && $record->{aux} ) {
+            my $sw = GetSystemMetrics(2);    # SM_CXVSCROLL
+            SetWindowPos( $record->{hwnd}, undef, $x,            $y, $w - $sw, $h, 0x0004 );
+            SetWindowPos( $record->{aux},  undef, $x + $w - $sw, $y, $sw,      $h, 0x0004 );
+        }
     }
 };
 1;

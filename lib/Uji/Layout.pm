@@ -7,25 +7,84 @@ class Uji::Layout v0.0.1 {
     method _intrinsic ($node) {
         my $t = $node->type;
         if ( $t eq 'text' || $t eq 'button' ) {
-            my $label = $node->label // '';
+            my $label = '' . ( $node->label // '' );
             my ( $tw, $th ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
             $tw += 24, $th += 10 if $t eq 'button';
             return ( $tw, $th );
         }
         if ( $t eq 'checkbox' || $t eq 'radio' ) {
-            my $label = $node->label // '';
+            my $label = '' . ( $node->label // '' );
             my ( $tw, $th ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
             $tw += 24, $th += 4;    # checkbox box / radio circle + text
             return ( $tw, $th );
         }
         if ( $t eq 'text_input' || $t eq 'password' ) {
-            my $val = $node->value // '';
+            my $val = '' . ( $node->value // '' );
             my $tw  = length $val ? ( $driver && $driver->can('measure_text') ? ( $driver->measure_text($val) )[0] : length($val) * 8 ) : 80;
             $tw += 16;
+            if ( $t eq 'text_input' && $node->multiline ) {
+                my $lines = () = ( $val =~ /\n/g );
+                $lines++;
+                $lines = 3 if $lines < 3;
+                return ( $tw < 80 ? 80 : $tw, $lines * 20 );
+            }
             return ( $tw < 80 ? 80 : $tw, 20 );
         }
+        if ( $t eq 'multiline_text' ) {
+            my $val = '' . ( $node->value // '' );
+
+            # Widest line sets width; the count of LF breaks (min 3) sets height.
+            my ( $w, $lines ) = ( 80, ( $val =~ tr/\n// ) + 1 );
+            for my $line ( split /\n/, $val ) {
+                my ( $tw ) = $driver && $driver->can('measure_text') ? $driver->measure_text($line) : ( length($line) * 8, 16 );
+                $w = $tw if $tw > $w;
+            }
+            $lines = 3 if $lines < 3;
+            return ( ( $w + 16 ) < 80 ? 80 : $w + 16, $lines * 20 );
+        }
         if ( $t eq 'slider' ) {
-            return ( 120, 26 );
+            return $node->orientation eq 'vertical' ? ( 26, 120 ) : ( 120, 26 );
+        }
+        if ( $t eq 'spin_box' ) {
+            my $val = '' . ( $node->value // '' );
+            my $tw  = length $val ? ( $driver && $driver->can('measure_text') ? ( $driver->measure_text($val) )[0] : length($val) * 8 ) : 80;
+            $tw += 40;    # value text + room for the up/down arrow buttons that overlay the right edge
+            return ( $tw < 80 ? 80 : $tw, 20 );
+        }
+        if ( $t eq 'progress_bar' ) {
+            return ( 100, 18 );
+        }
+        if ( $t eq 'toggle_switch' || $t eq 'toggle_button' ) {
+            my $label = '' . ( $node->label // '' );
+            my ( $tw, $th ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
+            $tw += 34, $th += 10;    # pushed-in look needs a bit more room than a plain button
+            return ( $tw, $th );
+        }
+        if ( $t eq 'link_button' ) {
+            my $label = '' . ( $node->label // '' );
+            my ( $tw, $th ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
+            $tw += 20, $th += 8;    # flat button: barely more padding than the label
+            return ( $tw, $th );
+        }
+        if ( $t eq 'combo_box' || $t eq 'list_box' ) {
+            my $opts = $node->options;
+
+            # Widest label, measuring through the driver when available (fallback: 8px/char).
+            # Always stringify: Affix's WString marshalling crashes on a numeric SV.
+            my $w = 0;
+            for my $o (@$opts) {
+                my $l = '' . ( $o->{label} // $o->{value} // '' );
+                my ( $tw ) = $driver && $driver->can('measure_text') ? $driver->measure_text($l) : ( length($l) * 8, 16 );
+                $w = $tw if $tw > $w;
+            }
+
+            # A combo box's height is field + dropped list; the list (at most ~6 rows) shows
+            # up to that many items. A list box is a visible list of the same max row count.
+            my $n = @$opts <= 6 ? @$opts : 6;
+            if ( $t eq 'combo_box' ) {
+                return ( ( $w + 40 ) < 100 ? 100 : $w + 40, 20 + ( $n * 18 ) );
+            }
+            return ( ( $w + 16 ) < 100 ? 100 : $w + 16, ( $n * 18 ) + 4 );
         }
         if ( $t eq 'column' || $t eq 'radio_group' ) {
             my $children = $node->children;

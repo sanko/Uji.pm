@@ -7,6 +7,20 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         $new_node->set_id( $old_node->id );
         $driver->update_registry($new_node);
 
+        # Mount-only props (multiline, orientation, align): if any changed, the native control
+        # must be destroyed and recreated from scratch. The ID is transferred so the registry
+        # entry is updated. We do NOT return here: the remaining prop diffs are idempotent
+        # re-applies against the freshly-mounted control, and the child loop below transfers the
+        # children's IDs so their existing HWNDs keep working.
+        if ( $old_node->can('_mount_only_props') ) {
+            for my $prop ( @{ $old_node->_mount_only_props } ) {
+                if ( ( $old_node->$prop // '' ) ne ( $new_node->$prop // '' ) ) {
+                    $driver->recreate_node( $old_node->id, $new_node );
+                    last;
+                }
+            }
+        }
+
         # Check title (Window)
         if ( $old_node->can('title') && $new_node->can('title') ) {
             if ( $old_node->title ne $new_node->title ) {
@@ -21,12 +35,20 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
-        # Check value (TextInput, Slider) -- radio_group is handled after the child loop
-        # so its radio children have stable, transferred IDs.
+        # Check value (TextInput, Slider, ComboBox, ListBox) -- radio_group is handled after the
+        # child loop so its radio children have stable, transferred IDs.
         if ( $old_node->can('value') && $new_node->can('value') && $new_node->type ne 'radio_group' ) {
-            if ( $old_node->value ne $new_node->value ) {
+            if ( $self->_value_key( $old_node->value ) ne $self->_value_key( $new_node->value ) ) {
                 $driver->set_prop( $new_node->id, 'value', $new_node->value );
             }
+        }
+
+        # Check options (ComboBox, ListBox) -- rebuild the item strings when they change.
+        # Deliberately a semantic compare (value|label pairs), not arrayref stringification.
+        if ( ( $new_node->type eq 'combo_box' || $new_node->type eq 'list_box' )
+            && $self->_opts_key($old_node) ne $self->_opts_key($new_node) )
+        {
+            $driver->set_prop( $new_node->id, 'options', $new_node->options );
         }
 
         # Check range (Slider)
@@ -77,6 +99,30 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             $driver->set_prop( $new_node->id, 'maxlength', $new_node->maxlength );
         }
 
+        # Check placeholder (TextInput/Password) -- EM_SETCUEBANNER
+        if ( $old_node->can('placeholder') && ( $old_node->placeholder // '' ) ne ( $new_node->placeholder // '' ) ) {
+            $driver->set_prop( $new_node->id, 'placeholder', $new_node->placeholder );
+        }
+
+        # Check password_char (Password) -- EM_SETPASSWORDCHAR
+        if ( $old_node->can('password_char') && ( $old_node->password_char // '' ) ne ( $new_node->password_char // '' ) ) {
+            $driver->set_prop( $new_node->id, 'password_char', $new_node->password_char );
+        }
+
+        # Check colour / background (all widgets) -- WM_CTLCOLOR*
+        for my $p (qw[ color background ]) {
+            if ( $old_node->can($p) && ( $old_node->$p // '' ) ne ( $new_node->$p // '' ) ) {
+                $driver->set_prop( $new_node->id, $p, $new_node->$p );
+            }
+        }
+
+        # Check font / font_size (all widgets) -- WM_SETFONT
+        for my $p (qw[ font font_size ]) {
+            if ( $old_node->can($p) && ( $old_node->$p // '' ) ne ( $new_node->$p // '' ) ) {
+                $driver->set_prop( $new_node->id, $p, $new_node->$p );
+            }
+        }
+
         # Window geometry / state (topmost, min/max, minimized, maximized)
         if ( $old_node->can('topmost') && $old_node->topmost != $new_node->topmost ) {
             $driver->set_prop( $new_node->id, 'topmost', $new_node->topmost );
@@ -119,6 +165,16 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
                 $driver->set_prop( $new_node->id, 'value', $new_node->value );
             }
         }
+    }
+
+    # Canonical form of a node's options (value|label pairs joined by NUL).
+    method _opts_key ($node) {
+        return join "\0", map { ( $_->{value} // '' ) . '|' . ( $_->{label} // '' ) } @{ $node->options // [] };
+    }
+
+    # Canonical form of a node's value: arrayref multi-selections are compared element-wise.
+    method _value_key ($value) {
+        return ref $value eq 'ARRAY' ? join "\0", map { '' . ( $_ // '' ) } @$value : '' . ( $value // '' );
     }
 };
 1;
