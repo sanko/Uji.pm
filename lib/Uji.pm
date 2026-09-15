@@ -19,6 +19,7 @@ package Uji v0.0.1 {
     use Uji::Reconciler;
     use Uji::App;
     use Exporter qw[import];
+    our %EXPORT_TAGS = (
     our @EXPORT = qw[app window column row text button text_input password slider checkbox radio_group];
     sub app         (%args)           { Uji::App->new(%args) }
     sub window      (%args)           { Uji::Node::Window->new(%args) }
@@ -31,5 +32,11 @@ package Uji v0.0.1 {
     sub slider      (%args)           { Uji::Node::Slider->new(%args) }
     sub checkbox    (%args)           { Uji::Node::Checkbox->new(%args) }
     sub radio_group (%args)           { Uji::Node::RadioGroup->new(%args) }
+        all => [
+            our @EXPORT
+                = qw[app window column row text button text_input password
+                ]
+        ]
+    );
 };
 1;
