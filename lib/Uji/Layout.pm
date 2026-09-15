@@ -36,7 +36,7 @@ class Uji::Layout v0.0.1 {
             # Widest line sets width; the count of LF breaks (min 3) sets height.
             my ( $w, $lines ) = ( 80, ( $val =~ tr/\n// ) + 1 );
             for my $line ( split /\n/, $val ) {
-                my ( $tw ) = $driver && $driver->can('measure_text') ? $driver->measure_text($line) : ( length($line) * 8, 16 );
+                my ($tw) = $driver && $driver->can('measure_text') ? $driver->measure_text($line) : ( length($line) * 8, 16 );
                 $w = $tw if $tw > $w;
             }
             $lines = 3 if $lines < 3;
@@ -63,7 +63,7 @@ class Uji::Layout v0.0.1 {
         if ( $t eq 'link_button' ) {
             my $label = '' . ( $node->label // '' );
             my ( $tw, $th ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
-            $tw += 20, $th += 8;    # flat button: barely more padding than the label
+            $tw += 20, $th += 8;     # flat button: barely more padding than the label
             return ( $tw, $th );
         }
         if ( $t eq 'combo_box' || $t eq 'list_box' ) {
@@ -74,7 +74,7 @@ class Uji::Layout v0.0.1 {
             my $w = 0;
             for my $o (@$opts) {
                 my $l = '' . ( $o->{label} // $o->{value} // '' );
-                my ( $tw ) = $driver && $driver->can('measure_text') ? $driver->measure_text($l) : ( length($l) * 8, 16 );
+                my ($tw) = $driver && $driver->can('measure_text') ? $driver->measure_text($l) : ( length($l) * 8, 16 );
                 $w = $tw if $tw > $w;
             }
 

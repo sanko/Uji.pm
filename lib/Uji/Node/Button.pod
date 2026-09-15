@@ -65,13 +65,12 @@ What to do when the button is clicked. Either a static message hashref or a call
     on_click => { type => 'INCREMENT' }
     on_click => sub { { type => 'RESET', value => 0 } }
 
-A static hashref is sent verbatim into the update loop; it is the message C<update> receives as
-C<< $msg->{type} = 'INCREMENT' >>. A callback is invoked at click time and its return value (a
-message hashref, or C<undef> to ignore the click) is sent instead. The callback form is handy when
-the message depends on data available only at click time.
+A static hashref is sent verbatim into the update loop; it is the message C<update> receives as C<< $msg->{type} =
+'INCREMENT' >>. A callback is invoked at click time and its return value (a message hashref, or C<undef> to ignore the
+click) is sent instead. The callback form is handy when the message depends on data available only at click time.
 
-Use one form per button; both are dispatched the same way by the Win32 driver (the callback is
-called, the hashref is sent as-is).
+Use one form per button; both are dispatched the same way by the Win32 driver (the callback is called, the hashref is
+sent as-is).
 
 =head3 Inherited Parameters
 

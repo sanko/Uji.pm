@@ -10,7 +10,7 @@ native FFI via Affix. This is a testbed for cooperative fibers via Acme::Paratax
 - [x] `LinkButton` (borderless `BS_FLAT` button, `on_click`; manifest-free `SysLink` approximation)
 - [x] `ProgressBar` (determinate; `msctls_progress32` via `ICC_PROGRESS_CLASS`)
 - [ ] `DatePicker`
-- [ ] **Multi-window app** (design ahead: several top-level `Window` nodes, one shared message loop / fiber pump, per-window vtrees reconciled independently, `WM_ACTIVATE` routing)
+- [x] **Multi-window app** (design ahead: several top-level `Window` nodes, one shared message loop / fiber pump, per-window vtrees reconciled independently, `WM_ACTIVATE` routing)
 
 ## Core Architecture
 - [x] Unidirectional State Loop (The Elm Architecture: Model-View-Update)
@@ -250,6 +250,22 @@ Order the user gave — do THESE next, in this order, after the spinner bug is c
   - [ ] `NSApplication` non-blocking event pump (`nextEventMatchingMask`)
   - [ ] Views (`NSButton`, `NSTextField`, `NSWindow`, `NSSlider`)
 - [ ] **Terminal (Cancer)**
+
+## Resolved Bug: app does not exit when the last window is closed (WM_DESTROY never put QUIT)
+
+**Status: FIXED** (`close_probe.pl`: `WaitForSingleObject=0 (EXITED)`; `chan_trace_probe.pl`: `[chan-put] QUIT` then `[chan-get] QUIT`; full suite 10 files / 211 tests PASS).
+**Report:** "When the last (only) window is closed, the app does not exit" — window disappeared on `WM_CLOSE` but the process stayed alive (`WaitForSingleObject` → 258).
+**Root cause (lib/Uji/Driver/Win32.pm):** the multi-window `WM_DESTROY` handler gates `QUIT` on `scalar(keys %surfaces) == 0`, and surfaces are looked up per-HWND via `surface_by_hwnd->{$hwnd}`. But the `WNDPROC` callback declared its first parameter as `Pointer [Void]`, and Affix hands a `Pointer` arg to a Perl callback as a **REF object whose numeric value is the SV's address — not the HWND integer** returned by `CreateWindowExW` (which is the hash key). Trace: `[mount] hwnd=0x2660C8E` vs `[wndproc] int=0x172F5AA5DF8`, `in_map=NO surface_id=undef`. So lookups always missed: `WM_DESTROY` deleted nothing and (with the surface still present) never put `QUIT`. It silently broke `WM_SIZE`/`WM_GETMINMAXINFO` mappings too.
+**The fix:** type the WNDPROC first arg as `Size_t` instead of `Pointer [Void]` — Affix then delivers the HWND as a plain integer, the map resolves, and `WM_DESTROY` reaches the surfaces-count check and emits `QUIT`. `DefWindowProcW`/`SendMessageW` already accept integer HWNDs.
+**Regression tests:** `t/005_driver_click.t` now posts `WM_CLOSE` to the last window and asserts exactly one `QUIT` on the channel and `surfaces` empty (would have failed pre-fix). Also `t/011_multi_window.t` covers the no-explicit-id window pairing fix.
+
+## Resolved Bug: flex layout runs at 800px default width after the first render (buttons overflow off-window)
+
+**Status: FIXED** (live `eg/widget_button.pl`: `+1` flexed to 225px, `Reset` visible at `(293,40)`, row flush at `360-15`; new regression subtest in `t/004_app_flow.t`; full suite 10 files / 212 tests PASS).
+**Report:** "The `+1` button and tooltip button are wide enough to be split in half by the right edge of the window. The reset button is just gone off the side." Window client was ~360px wide but every child came out ~770px wide (800 − 30 of column padding).
+**Root cause (lib/Uji/App.pm `_render`):** `view()` rebuilds the window node from scratch on every render, so its auto-generated id is not yet in the driver's surface map when `sync_window_bounds` runs — `patch_windows` transfers the OLD stable id onto the new node only afterwards. `sync_window_bounds` returned early (no surface record), the window node kept its zero bounds, and `Layout::compute` fell back to its `avail_w=800` default; everything was laid out 800px wide on a ~360px window. Introduced together with the window-id-transfer fix (previously windows were recreated each render, which packed real bounds along the mount path).
+**The fix:** before layout, adopt the previous window's measured client bounds (`bw`/`bh`) onto the freshly-built window node; `sync_window_bounds` still refreshes a live measure when the id resolves (stable-explicit-id case), then `compute` + a `_move_all` pass place every child. Unpaired single-window apps fall back to pairing with window #0.
+**Regression tests:** `t/004_app_flow.t` gained a "flex row stays inside the auto-id window after re-render" subtest (window keeps its mounted 360px width, flex `+1` fits, row ends flush) — it fails against the pre-fix code (window `bw` became 800). `t/lib/MockDriver::sync_window_bounds` now mirrors the real driver by skipping ids that were never mounted.
 
 ## Polish & Packaging
 - [ ] Standard system font scaling & DPI awareness

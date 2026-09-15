@@ -8,22 +8,20 @@ Uji - Modern, asynchronous GUI toolkit Built with FFI and Elm Architecture
 use v5.40;
 use Uji;
 
-# The MODEL: all of your UI state, in one plain hash
-# The only mutable thing in the program. Every widget on screen reads
-# from here, and nothing else tells the UI what to show.
-my $model = { count => 0 };
+# The model is your UI's state and is the only mutable thing in the program. Every widget on
+# screen reads from it and nothing else tells the UI what to show.
+my $model = { count => 0 }; # Here, it's represented by a hash reference
 
-# init(): produce the starting model and any initial commands
-# Runs exactly once, before the window exists. Returns ($model, $cmd);
-# the $cmd half is reserved for background side-effects and stays undef.
+# init() produces the starting model and any initial commands. It runs exactly once, before the
+# window exists and returns ($model, $cmd); the $cmd half is reserved for background
+# side-effects and stays undef.
 sub init () {
     return ( $model, undef );
 }
 
-# update(): fold a message into a new model
-# Pure: given the same ($msg, $model) it always returns the same model.
-# User gestures arrive here as plain hashref messages (see on_click,
-# on_input, on_toggle below).
+# update( ... ) folds a message into a new model. This is a pure function that's given the
+# ($msg, $model) and always returns the same model. User activity arrives here as plain hashref
+# messages (see on_click, on_input, on_toggle below).
 sub update ( $msg, $model ) {
     if ( $msg->{type} eq 'INCREMENT' ) {
         $model->{count} += 1;
@@ -34,13 +32,11 @@ sub update ( $msg, $model ) {
     return ( $model, undef );
 }
 
-# view(): turn the model into a declarative widget tree
-# Called at startup and after every batch of messages. Uji diffs each new
-# tree against the previous one and applies only the native updates that
-# actually changed - so this isn't a full rebuild every time.
+# view() turns the model into a declarative widget tree. Called at startup and after every
+# batch of messages. Uji diffs each new tree against the previous one and applies only the
+# native updates that actually changed - so this isn't a full rebuild every time.
 sub view ($model) {
-    # window() is the root of every view; there is exactly one per view.
-    Uji::window(
+    Uji::window( # window() is the root of every view
         title    => 'Counter',
         w        => 320,          # outer width/height
         h        => 140,
@@ -65,16 +61,9 @@ sub view ($model) {
     );
 }
 
-# run(): mount the window and start the event loop
-# connect the three callbacks; this never returns until the window closes.
+# run() mounts the window and starts the event loop after connecting the three callbacks. This
+# doesn't return until the window closes.
 Uji::app( init => \&init, update => \&update, view => \&view )->run;
-
-# The whole program is one loop:
-#   user clicks +1 -> { type => 'INCREMENT' } -> update() -> count is 1
-#   -> view() rebuilds the tree -> reconciler redraws only the label.
-#
-# State never lives in the widgets; the UI is always a pure function of
-# the model, so it can never drift out of sync with that state.
 ```
 
 # DESCRIPTION
@@ -177,9 +166,13 @@ The **view** function attaches messages to widgets using the `on_*` callback par
     ignore the event). The arguments differ per widget:
 
     ```perl
-    text_input  on_input  -> sub ($text)  { ... }   # full text string
+    text_input / multiline_text / password
+                on_input  -> sub ($text)  { ... }   # full text string
     slider      on_change -> sub ($value) { ... }   # numeric position
+    spin_box    on_change -> sub ($value) { ... }   # numeric position
     checkbox    on_toggle -> sub ($on)    { ... }   # 1 or 0
+    toggle_switch / toggle_button
+                on_toggle -> sub ($on)    { ... }   # 1 or 0
     radio_group on_select -> sub ($value) { ... }   # selected option's value
     ```
 
@@ -334,7 +327,8 @@ Uji::button( label => '+1', on_click => { type => 'INCREMENT' } );
 
 - `on_click`
 
-    A static message hashref, sent when the button is clicked. See ["Messages"](#messages).
+    A static message hashref, sent verbatim when the button is clicked or a callback `sub { ... }` whose return value (a
+    message hashref, or `undef`) is sent instead. See ["Messages"](#messages) and ["on\_click" in Uji::Node::Button](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AButton#on_click).
 
 ## `text_input ( %args )`
 
@@ -353,6 +347,15 @@ Uji::text_input(
 
     The editor's text. Default `''`.
 
+- `multiline`
+
+    `0` (default) single-line; `1` makes the same widget a scrolling multi-line text area. Recomposed live (recreative:
+    see ["Recreation" in Uji::Reconciler](https://metacpan.org/pod/Uji%3A%3AReconciler#Recreation)).
+
+- `placeholder`
+
+    A faint grey hint shown while the editor is empty. Default `undef` (no hint).
+
 - `on_input`
 
     Callback receiving the full text (`sub ($text) { ... }`) whenever the user edits the control. Returns a message (or
@@ -370,28 +373,50 @@ Uji::text_input(
 
     `1` to give the control keyboard focus at mount/on change. Default 0.
 
+## `multiline_text ( %args )`
+
+A multi-line text editor that keeps the same parameters as ["text\_input"](#text_input):
+
+```perl
+Uji::multiline_text(
+    value    => $model->{body},
+    readonly => $model->{locked},
+    color    => '#0F7B0F',
+    on_input => sub ($text) { { type => 'SET_BODY', value => $text } }
+);
+```
+
+Resolves to [Uji::Node::MultilineText](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AMultilineText), a subclass whose `multiline` is always on and never
+changes; otherwise identical to ["text\_input"](#text_input). All of ["text\_input"](#text_input)'s parameters apply.
+
 ## `password ( %args )`
 
 A masked text editor (an edit control with />`ES_PASSWORD`). The native display is hidden; the message
 payload is the plain text.
 
 ```perl
-Uji::password( value => $model->{secret}, on_input => sub ($t) { { type => 'SET_SECRET', value => $t } } );
+Uji::password(
+    value         => $model->{secret},
+    password_char => '*',
+    on_input      => sub ($t) { { type => 'SET_SECRET', value => $t } }
+);
 ```
 
-Same parameters as ["text\_input"](#text_input).
+Same parameters as ["text\_input"](#text_input), plus `password_char` (the character drawn in place of each typed character;
+`undef` lets Windows pick its standard bullet).
 
 ## `slider ( %args )`
 
-A horizontal range slider.
+A horizontal or vertical range slider.
 
 ```perl
 Uji::slider(
-    value     => $model->{level},
-    min       => 0,
-    max       => 100,
-    step      => 1,               # or 25 when "locked"
-    on_change => sub ($v) { { type => 'SET_LEVEL', value => $v } }
+    value       => $model->{level},
+    min         => 0,
+    max         => 100,
+    step        => 1,               # or 25 when "locked"
+    orientation => 'vertical',      # 'horizontal' (the default)
+    on_change   => sub ($v) { { type => 'SET_LEVEL', value => $v } }
 );
 ```
 
@@ -407,9 +432,109 @@ Uji::slider(
 
     Increment used by arrow-key / page interaction. Default 1.
 
+- `orientation`
+
+    `'horizontal'` (default) or `'vertical'`. Recomposed live (recreative: see ["Recreation" in Uji::Reconciler](https://metacpan.org/pod/Uji%3A%3AReconciler#Recreation)).
+
 - `on_change`
 
     Callback receiving the numeric position. Returns a message (or `undef`).
+
+## `spin_box ( %args )`
+
+A numeric stepper: an edit box with up/down arrow buttons glued to its right edge. The value is read-only in the UI,
+the arrows (or keyboard arrows, when focused) change it.
+
+```perl
+Uji::spin_box(
+    value     => $model->{count},
+    min       => 0,
+    max       => 100,
+    step      => 5,
+    on_change => sub ($v) { { type => 'SET_COUNT', value => $v } }
+);
+```
+
+- `value`
+
+    Current number. Default 0.
+
+- `min` / `max`
+
+    Allowed range. Defaults 0 / 100.
+
+- `step`
+
+    Increment applied to a single arrow click. Default 1.
+
+- `on_change`
+
+    Callback receiving the new numeric position. Returns a message (or `undef`).
+
+## `progress_bar ( %args )`
+
+A determinate progress (percentage-style) bar. Purely presentational; no callbacks.
+
+```perl
+Uji::progress_bar( value => $model->{level}, min => 0, max => 100 );
+```
+
+- `value`
+
+    Current fill position. Default 0.
+
+- `min` / `max`
+
+    Range endpoints. Defaults 0 / 100.
+
+## `toggle_switch ( %args )` / `toggle_button ( %args )`
+
+Two-state controls with a sticky (pushed-in) look. Both behave like a checkbox, click to toggle, `checked` state lives
+in the model, but render as switches/buttons rather than a square box. The only difference is conceptual: a switch
+reads as an on/off indicator, a toggle button as a stateful action.
+
+```perl
+Uji::toggle_switch(
+    label     => 'Enable editing',
+    checked   => $model->{enabled},
+    on_toggle => sub ($on) { { type => 'TOGGLE_ENABLED', value => $on } }
+);
+
+Uji::toggle_button(
+    label     => ( $model->{locked} ? 'Locked' : 'Unlocked' ),
+    checked   => $model->{locked},
+    on_toggle => sub ($on) { { type => 'TOGGLE_LOCK', value => $on } }
+);
+```
+
+- `label`
+
+    Text drawn on the control. Default `''`.
+
+- `checked`
+
+    `1` for on/pushed, `0` for off/released. Default 0.
+
+- `on_toggle`
+
+    Callback receiving the post-click state (`1` or `0`). Returns a message (or `undef`).
+
+## `link_button ( %args )`
+
+A borderless "hyperlink-like" button. Its `on_click` uses the same contract as `button`: a static message hashref is
+sent verbatim; a callback is invoked and its return value is sent.
+
+```perl
+Uji::link_button( label => 'Visit docs', on_click => { type => 'OPEN_DOCS' } );
+```
+
+- `label`
+
+    Text drawn on the button. Default `''`.
+
+- `on_click`
+
+    Message hashref, or a callback returning one (or `undef`).
 
 ## `checkbox ( %args )`
 
@@ -469,6 +594,83 @@ Uji::radio_group(
 
 Radios are created internally as [Uji::Node::Radio](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ARadio) children whose [Uji::Node](https://metacpan.org/pod/Uji%3A%3ANode) ids are memoized per group instance,
 so the native checkboxes keep stable handles across re-renders even as the model changes the selection.
+
+## `combo_box ( %args )`
+
+A dropdown selection; on Win32 a native combo box. Non-editable by default, selectable from the list.
+
+```perl
+Uji::combo_box(
+    value   => $model->{color},
+    options => [
+        { value => 'red',   label => 'Red' },
+        { value => 'green', label => 'Green' },
+        { value => 'blue',  label => 'Blue' }
+    ],
+    on_select => sub ($v) { { type => 'SET_COLOR', value => $v } }
+);
+```
+
+- `value`
+
+    The currently selected option's `value`. Default `''`.
+
+- `options`
+
+    Array reference of `{ value => ..., label => ... }` hashrefs. The `label` defaults to the `value`.
+
+- `editable`
+
+    When true, the box is an editable dropdown (`CBS_DROPDOWN`): the user can type free text or pick a listed option.
+    Default 0.
+
+- `on_select`
+
+    Callback receiving the selected option's `value`; for an editable box that has been typed instead of picked, it
+    receives the typed text. Returns a message (or `undef`).
+
+- `on_input`
+
+    For editable boxes: callback receiving the current text on every edit (the `CBN_EDITCHANGE` path). Returns a message
+    (or `undef`).
+
+## `list_box ( %args )`
+
+A visible, scrollable list; a single selection by default, or multiple selections with `multiple`.
+
+```perl
+Uji::list_box(
+    value     => $model->{count},
+    options   => [ map { { value => $_, label => "Row $_" } } 1 .. 10 ],
+    on_select => sub ($v) { { type => 'SET_COUNT', value => $v } }
+);
+
+# Multi-select: ordinary clicks toggle each row; value is an arrayref.
+Uji::list_box(
+    multiple  => 1,
+    value     => [ 2, 5 ],
+    options   => [ map { { value => $_, label => "Row $_" } } 1 .. 10 ],
+    on_select => sub ($v) { { type => 'SET_PICKS', value => $v } }
+);
+```
+
+- `value`
+
+    The currently selected option's `value`. With `multiple` it is an arrayref of selected option values. Default `''`.
+
+- `options`
+
+    Array reference of `{ value => ..., label => ... }` hashrefs. The `label` defaults to the `value`.
+
+- `multiple`
+
+    Boolean, default false. When true the list allows several rows to be selected at once; the value (`value`) and the
+    `on_select` argument become arrayrefs of the selected option values.
+
+- `on_select`
+
+    Callback receiving the selected option's `value` (or an arrayref of them for `multiple` lists). Returns a message (or
+    `undef`).
 
 # COMMON NODE PARAMETERS
 
@@ -543,9 +745,11 @@ channel. The `RESIZE` and `QUIT` message types are reserved for internal use - d
 
 - [Uji::App](https://metacpan.org/pod/Uji%3A%3AApp) - the TEA runtime (fibers, channel, render loop)
 - [Uji::Node](https://metacpan.org/pod/Uji%3A%3ANode) - the base virtual-node class and common parameters
-- [Uji::Node::Button](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AButton), [Uji::Node::Text](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AText), [Uji::Node::TextInput](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ATextInput), [Uji::Node::Slider](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ASlider),
-[Uji::Node::Checkbox](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ACheckbox), [Uji::Node::Radio](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ARadio), [Uji::Node::RadioGroup](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ARadioGroup), [Uji::Node::Column](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AColumn),
-[Uji::Node::Row](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ARow), [Uji::Node::Window](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AWindow)
+- [Uji::Node::Button](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AButton), [Uji::Node::Text](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AText), [Uji::Node::TextInput](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ATextInput), [Uji::Node::MultilineText](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AMultilineText),
+[Uji::Node::Password](https://metacpan.org/pod/Uji%3A%3ANode%3A%3APassword), [Uji::Node::Slider](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ASlider),
+[Uji::Node::SpinBox](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ASpinBox), [Uji::Node::ProgressBar](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AProgressBar), [Uji::Node::Checkbox](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ACheckbox), [Uji::Node::ToggleSwitch](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AToggleSwitch),
+[Uji::Node::ToggleButton](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AToggleButton), [Uji::Node::LinkButton](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ALinkButton), [Uji::Node::Radio](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ARadio), [Uji::Node::RadioGroup](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ARadioGroup),
+[Uji::Node::ComboBox](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AComboBox), [Uji::Node::ListBox](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AListBox), [Uji::Node::Column](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AColumn), [Uji::Node::Row](https://metacpan.org/pod/Uji%3A%3ANode%3A%3ARow), [Uji::Node::Window](https://metacpan.org/pod/Uji%3A%3ANode%3A%3AWindow)
 - [Uji::Layout](https://metacpan.org/pod/Uji%3A%3ALayout) - the pure-Perl layout engine
 - [Uji::Reconciler](https://metacpan.org/pod/Uji%3A%3AReconciler) - VDOM diffing and patching
 - [Uji::Driver](https://metacpan.org/pod/Uji%3A%3ADriver), [Uji::Driver::Win32](https://metacpan.org/pod/Uji%3A%3ADriver%3A%3AWin32) - platform abstraction

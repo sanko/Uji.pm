@@ -11,14 +11,22 @@ class MockDriver {
     field $calls    : reader = [];    # [ $method, @args ]
     field $checks   : reader = {};    # id => checked state (0/1)
     field $mounted  : reader = 0;
+    field $mounts   : reader = {};
+    field $unmounts : reader = {};
     field $vtree;
     #
     method poll_events {1}
-    method mount ($t) { $mounted = 1; $vtree = $t; $t->set_bounds( 0, 0, 360, 400 ); 1 }
+    method mount   ($t) { $mounted = 1; $vtree = $t; $t->set_bounds( 0, 0, 360, 400 ); $mounts->{ $t->id } = 1; 1 }
+    method unmount ($t) { $unmounts->{ $t->id } = 1; delete $mounts->{ $t->id }; 1 }
     method mount_children ($t) { $self->_register($t); 1 }
     method _is_mounted { $mounted ? 1 : 0 }
-    method sync_window_bounds ($t)    { $t->set_bounds( 0, 0, 360, 400 ); 1 }
-    method measure_text       ($text) { return ( length( $text // '' ) * 8, 16 ) }
+
+    method sync_window_bounds ($t) {
+        return 1 unless $mounts->{ $t->id };    # real driver: no surface record for a fresh id
+        $t->set_bounds( 0, 0, 360, 400 );
+        1;
+    }
+    method measure_text ($text) { return ( length( $text // '' ) * 8, 16 ) }
 
     method update_registry ($node) {
         $registry->{ $node->id }{node} = $node if exists $registry->{ $node->id };
@@ -76,10 +84,10 @@ class MockDriver {
         $registry->{ $node->id } = { hwnd => $node->id, node => $node };
 
         # Mirror the real driver's initial BM_SETCHECK/BM_SETPOS at mount time.
-        if    ( $node->type eq 'checkbox' || $node->type eq 'toggle_switch' || $node->type eq 'toggle_button' ) {
+        if ( $node->type eq 'checkbox' || $node->type eq 'toggle_switch' || $node->type eq 'toggle_button' ) {
             $checks->{ $node->id } = $node->checked ? 1 : 0;
         }
-        elsif ( $node->type eq 'radio' )    { $checks->{ $node->id } = $node->selected ? 1 : 0 }
+        elsif ( $node->type eq 'radio' ) { $checks->{ $node->id } = $node->selected ? 1 : 0 }
         $self->_register($_) for @{ $node->children };
     }
 }

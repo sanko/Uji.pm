@@ -11,7 +11,7 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
     field $update     : param;
     field $view       : param;
     field $model      : reader;
-    field $vtree      : reader;
+    field $vtrees     : reader;
     field $channel    : param //= Acme::Parataxis::Channel->new( capacity => 1024 );
     field $driver     : param //= Uji::Driver::detect();
     field $reconciler : param //= Uji::Reconciler->new();
@@ -19,7 +19,7 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
 
     # Clamp a client-area size against the window node's min/max constraints.
     # (min/max live on the root window node so the layout has a single source of truth.)
-    method _clamp_size ( $cw, $ch ) {
+    method _clamp_size ( $vtree, $cw, $ch ) {
         $cw = $vtree->min_w if $vtree->min_w && $cw < $vtree->min_w;
         $ch = $vtree->min_h if $vtree->min_h && $ch < $vtree->min_h;
         $cw = $vtree->max_w if $vtree->max_w && $cw > $vtree->max_w;
@@ -27,15 +27,26 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
         return ( $cw, $ch );
     }
 
-    method _relayout_now ( $cw = undef, $ch = undef ) {
-        return unless $vtree && $driver->can('_is_mounted') && $driver->_is_mounted();
+    method _relayout_now ( $arg1 = undef, $arg2 = undef, $arg3 = undef ) {
+        return unless $vtrees && $driver->can('_is_mounted') && $driver->_is_mounted();
 
-        #~ print $lfh "RELAYOUT cw=$cw ch=$ch vtree=$vtree layout=$layout\n";
+        # Backward compatibility with older drivers that just send ($cw, $ch)
+        my ( $window_id, $cw, $ch );
+        if ( defined $arg3 ) {
+            ( $window_id, $cw, $ch ) = ( $arg1, $arg2, $arg3 );
+        }
+        elsif ( defined $arg1 && defined $arg2 ) {
+            ( $cw, $ch ) = ( $arg1, $arg2 );
+            $window_id = $vtrees->[0]->id;
+        }
+        my $vtree = $window_id ? ( grep { $_->id eq $window_id } @$vtrees )[0] : $vtrees->[0];
+        return unless $vtree;
+
         # Use the client size passed by WM_SIZE's lParam; fall back to a fresh measure if it was
         # not supplied. Runs inside the wndproc, so no fiber switch allows live updates during the
         # drag loop.
         if ( defined $cw && defined $ch ) {
-            ( $cw, $ch ) = $self->_clamp_size( $cw, $ch );
+            ( $cw, $ch ) = $self->_clamp_size( $vtree, $cw, $ch );
             $vtree->set_bounds( 0, 0, $cw, $ch );
         }
         else {
@@ -57,22 +68,39 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
 
     # Mount the window, lay out the initial vtree, and create the child widgets.
     method _mount () {
-        $vtree = $view->($model);
+        my $res = $view->($model);
+        $vtrees = ref $res eq 'ARRAY' ? $res : [$res];
+        for my $vtree (@$vtrees) {
 
-        # Mount window first so we can measure its real client area,
-        # then compute layout against that, then create the child widgets.
-        $driver->mount($vtree);
-        $layout->compute($vtree);
-        $driver->mount_children($vtree);
+            # Mount window first so we can measure its real client area,
+            # then compute layout against that, then create the child widgets.
+            $driver->mount($vtree);
+            $layout->compute($vtree);
+            $driver->mount_children($vtree);
+        }
     }
 
     # Rebuild the view from the current model and reconcile the diff into the driver.
     method _render () {
-        my $new_vtree = $view->($model);
-        $driver->sync_window_bounds($new_vtree);
-        $layout->compute($new_vtree);
-        $reconciler->patch( $vtree, $new_vtree, $driver );
-        $vtree = $new_vtree;
+        my $res        = $view->($model);
+        my $new_vtrees = ref $res eq 'ARRAY' ? $res : [$res];
+
+        # view() rebuilds the window node from scratch, so its auto-generated id isn't in the
+        # driver's surface map yet (patch_windows below transfers the OLD id onto it, too late
+        # for sync_window_bounds). Adopt the old window's client bounds so compute() lays out
+        # against the real size instead of Layout's 800x600 default -- which made every child
+        # ~2.5x too wide and pushed the flex row past the right edge.
+        for my $i ( 0 .. $#$new_vtrees ) {
+            my $new_vtree = $new_vtrees->[$i];
+            my $i_old     = $i < @$vtrees ? $i : 0;
+            my $old_vtree = $vtrees->[$i_old];
+            $new_vtree->set_bounds( 0, 0, $old_vtree->bw, $old_vtree->bh ) if $old_vtree;
+            $driver->sync_window_bounds($new_vtree);    # fresh measure when the id resolves
+            $layout->compute($new_vtree);
+            $self->_move_all( $new_vtree, $driver );
+        }
+        $reconciler->patch_windows( $vtrees, $new_vtrees, $driver );
+        $vtrees = $new_vtrees;
     }
 
     # First message already read off the channel; drain any stragglers, fold every message

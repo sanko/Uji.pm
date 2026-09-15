@@ -17,10 +17,23 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     field $item_pins;           # hwnd -> [ malloc'd UTF-16 item strings still referenced by the control ]
     field $brush_cache = {};    # '#RRGGBB' -> HBRUSH
     field $font_cache  = {};    # 'Name|Size' -> HFONT
+
+    # Per-surface registries for the shared-pump multi-window skeleton. Each surface (top-level HWND
+    # family) owns a records map so WM_ACTIVATE / WM_CLOSE / tooltips route by surface. Today the only
+    # live surface is 'main' (a placeholder _mount_sibling_window can reserve extra surfaces before real
+    # sibling top-level HWNDs are wired by the reconciler).
+    field $surfaces        : reader = {};    # surface_id => { hwnd, node, records => HASHREF, planned => 0|1 }
+    field $surface_by_hwnd : reader = {};    # hwnd -> surface_id
     ADJUST {
         $registry  = {};
         $item_pins = {};
-        typedef WNDPROC => Callback [ [ Pointer [Void], UInt, Size_t, SSize_t ] => SSize_t ];
+
+        # WNDPROC: note the HWND first arg is typed Size_t (NOT Pointer [Void]). Affix hands a
+        # Pointer arg to the callback as a REF object whose numification is the SV's address, so
+        # surface_by_hwnd->{$hwnd} (keyed by the integer returned from CreateWindowExW) would
+        # never match. As Size_t we receive the HWND as a plain integer, so WM_DESTROY /
+        # WM_SIZE / WM_GETMINMAXINFO can resolve the surface and close routing works.
+        typedef WNDPROC => Callback [ [ Size_t, UInt, Size_t, SSize_t ] => SSize_t ];
         typedef WNDCLASSEXW => Struct [
             cbSize        => UInt,
             style         => UInt,
@@ -219,20 +232,30 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 }
             }
             elsif ( $msg == 0x0002 ) {    # WM_DESTROY
-                $self_ref->channel->put( { type => 'QUIT' } );
+                my $surface_id = $self_ref->surface_by_hwnd->{$hwnd};
+                if ($surface_id) {
+                    delete $self_ref->surfaces->{$surface_id};
+                    delete $self_ref->surface_by_hwnd->{$hwnd};
+                }
+
+                # If there are no more surfaces, quit.
+                if ( scalar( keys %{ $self_ref->surfaces } ) == 0 ) {
+                    $self_ref->channel->put( { type => 'QUIT' } );
+                }
             }
             elsif ( $msg == 0x0005 ) {    # WM_SIZE -> window was resized; re-layout
-
-                # lParam low/high words = new client W/H, so we can re-layout synchronously (the
-                # renderer fiber is blocked inside the modal drag loop).
                 my $cw = $lparam & 0xFFFF;
                 my $ch = ( $lparam >> 16 ) & 0xFFFF;
                 $self_ref->channel->put( { type => 'RESIZE' } );
                 my $cb = $self_ref->_get_resize_handler;
-                $cb->( $cw, $ch ) if $cb;
+                if ($cb) {
+                    my $surface_id = $self_ref->surface_by_hwnd->{$hwnd};
+                    $cb->( $surface_id, $cw, $ch );
+                }
             }
             elsif ( $msg == 0x0024 ) {    # WM_GETMINMAXINFO -> clamp window track sizes to min/max
-                my $vn = $self_ref->main_vnode;
+                my $surface_id = $self_ref->surface_by_hwnd->{$hwnd};
+                my $vn         = $surface_id ? $self_ref->surfaces->{$surface_id}{node} : undef;
                 if ($vn) {
                     my $mmi = cast( $lparam, MINMAXINFO() );
                     my ( $min_w, $min_h ) = ( $vn->min_w, $vn->min_h );
@@ -369,7 +392,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     # Native progress bars render fills for the given position with no clipping, so a model value
     # outside the control's range would draw a bar "over 100%". Clamp to the declared range so a
     # progress bar can never visually exceed its max.
-    method _clamp_to_range ($vnode, $value) {
+    method _clamp_to_range ( $vnode, $value ) {
         my $min = defined $vnode->min ? $vnode->min : 0;
         my $max = defined $vnode->max ? $vnode->max : 100;
         $value = $min if $value < $min;
@@ -526,31 +549,45 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     }
 
     method mount ($vtree) {
-
-        # Publish the window node before creating the HWND so WM_GETMINMAXINFO (fired during
-        # creation) can read min/max constraints immediately.
-        $main_vnode = $vtree;
+        my $surface_id = $vtree->id;
+        $main_vnode //= $vtree;    # keep the first as fallback
 
         # WS_OVERLAPPEDWINDOW (0x10CF0000); drop WS_THICKFRAME (0x00040000) when not resizable
         my $style = $vtree->resizable ? 0x10CF0000 : 0x10CB0000;
-        $main_hwnd = CreateWindowExW( 0, 'UjiWindowClass', $vtree->title, $style, 100, 100, $vtree->w, $vtree->h, undef, 0, undef, undef );
-        $registry->{ $vtree->id } = { hwnd => $main_hwnd, node => $vtree };
+        my $hwnd  = CreateWindowExW( 0, 'UjiWindowClass', $vtree->title, $style, 100, 100, $vtree->w, $vtree->h, undef, 0, undef, undef );
+        $registry->{ $vtree->id } = { hwnd => $hwnd, node => $vtree, surface => $surface_id };
+        $surfaces->{$surface_id}  = { hwnd => $hwnd, node => $vtree, records => {} };
+        $surface_by_hwnd->{$hwnd} = $surface_id;
+        $main_hwnd //= $hwnd;      # First window acts as main (e.g. for tooltips)
 
         # Lay out against the real client area: the outer size includes the title bar and borders,
         # so we re-measure and fix up the window node before children are computed.
-        my ( $cw, $ch ) = $self->_get_client_size($main_hwnd);
+        my ( $cw, $ch ) = $self->_get_client_size($hwnd);
         $vtree->set_bounds( 0, 0, $cw, $ch );
 
         # Centering must happen after the window has its final requested size. We re-apply the
         # driver's own requested size (w/h) so a centered window does not drift from the spec.
         if ( $vtree->centered ) {
-            $self->_set_window_outer( $main_hwnd, $vtree->w, $vtree->h, 'center' );
-            my ( $nw, $nh ) = $self->_get_client_size($main_hwnd);
+            $self->_set_window_outer( $hwnd, $vtree->w, $vtree->h, 'center' );
+            my ( $nw, $nh ) = $self->_get_client_size($hwnd);
             $vtree->set_bounds( 0, 0, $nw, $nh );
         }
-        SetWindowPos( $main_hwnd, $vtree->topmost ? -1 : -2, 0, 0, 0, 0, 0x0003 ) if $vtree->topmost;
-        ShowWindow( $main_hwnd, $vtree->maximized ? 3 : $vtree->minimized ? 2 : 5 );
-        UpdateWindow($main_hwnd);
+        SetWindowPos( $hwnd, $vtree->topmost ? -1 : -2, 0, 0, 0, 0, 0x0003 ) if $vtree->topmost;
+        ShowWindow( $hwnd, $vtree->maximized ? 3 : $vtree->minimized ? 2 : 5 );
+        UpdateWindow($hwnd);
+    }
+
+    method unmount ($vtree) {
+        my $surface_id = $vtree->id;
+        my $surface    = $surfaces->{$surface_id};
+        if ( $surface && $surface->{hwnd} ) {
+            DestroyWindow( $surface->{hwnd} );
+
+            # Clean up maps
+            delete $surface_by_hwnd->{ $surface->{hwnd} };
+            delete $surfaces->{$surface_id};
+            delete $registry->{$surface_id};
+        }
     }
 
     # Resize/reposition the main window from a NEW client size. Computes the outer size from the
@@ -632,13 +669,17 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     }
 
     method sync_window_bounds ($vtree) {
-        return unless $main_hwnd;
-        my ( $cw, $ch ) = $self->_get_client_size($main_hwnd);
+        my $surface = $surfaces->{ $vtree->id };
+        my $hwnd    = $surface ? $surface->{hwnd} : undef;
+        return unless $hwnd;
+        my ( $cw, $ch ) = $self->_get_client_size($hwnd);
         $vtree->set_bounds( 0, 0, $cw, $ch );
     }
 
     method mount_children ($vtree) {
-        $self->_mount_node( $vtree->child, $main_hwnd ) if $vtree->child;
+        my $surface = $surfaces->{ $vtree->id };
+        my $hwnd    = $surface ? $surface->{hwnd} : undef;
+        $self->_mount_node( $vtree->child, $hwnd ) if $vtree->child && $hwnd;
     }
 
     method _get_client_size ($hwnd) {
@@ -664,6 +705,17 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         free($buf);
         ReleaseDC( $font_hwnd, $dc );
         return ( $w, $h );
+    }
+
+    # Multi-window skeleton reservation hook (gated: nothing calls this today, no real sibling HWND
+    # is ever created here). Registers a *planned* sibling surface so the reconciler has a stable
+    # surface_id to wire real sibling top-level HWNDs into later. The records map stays undone and
+    # 'planned' is set so the shared-pump skeleton can see reserved-but-not-live surfaces. Returns
+    # the planned surface_id (or undef when $vtree has no id worth planning for).
+    method _mount_sibling_window ($vtree) {
+        my $surface_id = 'main.sibling.' . $vtree->id;
+        $surfaces->{$surface_id} = { hwnd => undef, node => undef, records => undef, planned => 1 };
+        return $surface_id;
     }
 
     method poll_events () {
@@ -790,12 +842,13 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
 
             # Containers have no HWND but radio_group needs a registry entry so set_prop('value')
             # can route the selection to its radio children.
-            $registry->{ $vnode->id } = { hwnd => undef, node => $vnode } if $vnode->type eq 'radio_group';
+            $registry->{ $vnode->id } = { hwnd => undef, node => $vnode, surface => 'main' } if $vnode->type eq 'radio_group';
             return;
         }
         my $hwnd = CreateWindowExW( 0, $class, $initial_text, $style, $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef,
             undef );
-        $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode, parent_hwnd => $parent_hwnd };
+        $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode, parent_hwnd => $parent_hwnd, surface => 'main' };
+        $surface_by_hwnd->{$hwnd} = 'main';    # reverse map: HWND -> surface_id (each control HWND belongs to the main surface today)
 
         # Apply initial state for props that aren't baked into styles.
         EnableWindow( $hwnd, $vnode->enabled ? 1 : 0 );
@@ -833,14 +886,14 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             # PBM_SETRANGE32 (0x0406) takes wParam = min and lParam = max as SEPARATE values
             # (NOT packed like the trackbar). Packing them made the range 0..6,553,600 and the
             # bar never filled.
-            SendMessageW( $hwnd, 0x0406, $vnode->min,   $vnode->max );                     # PBM_SETRANGE32
-            SendMessageW( $hwnd, 0x0402, $self->_clamp_to_range( $vnode, $vnode->value ), 0 );    # PBM_SETPOS
+            SendMessageW( $hwnd, 0x0406, $vnode->min,                                     $vnode->max );    # PBM_SETRANGE32
+            SendMessageW( $hwnd, 0x0402, $self->_clamp_to_range( $vnode, $vnode->value ), 0 );              # PBM_SETPOS
         }
         if ( $vnode->type eq 'radio' ) {
-            SendMessageW( $hwnd, 0x00F1, $vnode->selected ? 1 : 0, 0 );    # BM_SETCHECK
+            SendMessageW( $hwnd, 0x00F1, $vnode->selected ? 1 : 0, 0 );                                     # BM_SETCHECK
         }
         if ( $vnode->type eq 'password' && defined $vnode->password_char ) {
-            SendMessageW( $hwnd, 0x00CC, CORE::ord( $vnode->password_char ), 0 );    # EM_SETPASSWORDCHAR
+            SendMessageW( $hwnd, 0x00CC, CORE::ord( $vnode->password_char ), 0 );                           # EM_SETPASSWORDCHAR
         }
         if ( $vnode->type eq 'combo_box' || $vnode->type eq 'list_box' ) {
             $self->_populate_strings( $hwnd, $vnode );

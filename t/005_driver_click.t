@@ -18,16 +18,16 @@ my $rg = Uji::radio_group(
     options   => [ { value => 'red', label => 'Red' }, { value => 'green', label => 'Green' }, { value => 'blue', label => 'Blue' }, ],
     on_select => sub ($v) { { type => 'SET_COLOR', value => $v } },
 );
-my $btn_static  = Uji::button( label => '+1', on_click => { type => 'INCREMENT' } );
+my $btn_static  = Uji::button( label => '+1',    on_click => { type => 'INCREMENT' } );
 my $btn_cb      = Uji::button( label => 'Reset', on_click => sub { { type => 'RESET', value => 0 } } );
-my $btn_nothing = Uji::button( label => 'Noop', on_click => sub { undef } );
-my $col = Uji::column(
+my $btn_nothing = Uji::button( label => 'Noop',  on_click => sub {undef} );
+my $col         = Uji::column(
     children => [
         Uji::checkbox( label => 'Dark mode', checked => 0, on_toggle => sub ($on) { { type => 'TOGGLE_DARK', value => $on } } ),
         $rg, $btn_static, $btn_cb, $btn_nothing,
     ],
 );
-my $vtree = Uji::window( title => 't', w => 360, h => 400, child => $col );
+my $vtree = Uji::window( id => 'main', title => 't', w => 360, h => 400, child => $col );
 $drv->mount($vtree);
 my $layout = Uji::Layout->new( driver => $drv );
 $layout->compute( $vtree, 0, 0, 360, 400 );
@@ -70,25 +70,34 @@ is $msg3 && $msg3->{type},  'SET_COLOR', 'radio click produced SET_COLOR';
 is $msg3 && $msg3->{value}, 'red',       'SET_COLOR carries "red"';
 
 # Static-message button: BN_CLICKED must send the hashref verbatim.
-Uji::Driver::Win32::SendMessageW( $bsr->{hwnd}, 0x00F5, 0, 0 );    # BM_CLICK
+Uji::Driver::Win32::SendMessageW( $bsr->{hwnd}, 0x00F5, 0, 0 );     # BM_CLICK
 my $msg4 = $chan->size ? $chan->get : undef;
 ok $msg4, 'static-message button produced a channel message';
-is ref $msg4, 'HASH', 'static-message button message is a hashref';
+is ref $msg4,              'HASH',      'static-message button message is a hashref';
 is $msg4 && $msg4->{type}, 'INCREMENT', 'static-message button carries its hashref verbatim';
 
 # Callback button: the driver must CALL on_click and send its return value (not the coderef).
-Uji::Driver::Win32::SendMessageW( $bcr->{hwnd}, 0x00F5, 0, 0 );    # BM_CLICK
+Uji::Driver::Win32::SendMessageW( $bcr->{hwnd}, 0x00F5, 0, 0 );     # BM_CLICK
 my $msg5 = $chan->size ? $chan->get : undef;
 ok $msg5, 'callback button produced a channel message';
 is ref $msg5, 'HASH', 'callback button message is a hashref (not a coderef)';
 is $msg5 && $msg5->{type},  'RESET', 'callback button message type comes from the return value';
-is $msg5 && $msg5->{value}, 0,      'callback button message carries its return value';
+is $msg5 && $msg5->{value}, 0,       'callback button message carries its return value';
 
 # A callback that returns undef produces no message at all.
-Uji::Driver::Win32::SendMessageW( $bnr->{hwnd}, 0x00F5, 0, 0 );    # BM_CLICK
+Uji::Driver::Win32::SendMessageW( $bnr->{hwnd}, 0x00F5, 0, 0 );     # BM_CLICK
 is $chan->size, 0, 'noop callback button produces no channel message';
 
-# Move window off-screen / close it so the test is unobtrusive
-Uji::Driver::Win32::SendMessageW( $wrb->{hwnd}, 0x0010, 0, 0 );     # WM_CLOSE -> WM_DESTROY
+# Closing the last window must destroy the surface and put a QUIT on the channel.
+# (Regression: the wndproc HWND arrives as a pointer object, so the surface_by_hwnd
+# lookup used to miss, WM_DESTROY deleted nothing, and no QUIT was emitted.)
+Uji::Driver::Win32::SendMessageW( $wrb->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE -> WM_DESTROY
+my @tail;
+while ( $chan->size ) {
+    my $m = $chan->get;
+    push @tail, $m;
+}
+is scalar( grep { ref $_ eq 'HASH' && $_->{type} eq 'QUIT' } @tail ), 1, 'closing the last window puts exactly one QUIT on the channel';
+is scalar( keys %{ $drv->surfaces } ),                                0, 'no surfaces remain after closing the last window';
 #
 done_testing;

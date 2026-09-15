@@ -2,6 +2,49 @@ use v5.40;
 use experimental 'class';
 class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
 
+    method patch_windows ( $old_vtrees, $new_vtrees, $driver ) {
+
+        # view() rebuilds the window nodes from scratch on every render, so auto-generated ids
+        # (Uji::Node's monotonic counter) never match between passes. Pair each new window with
+        # an old one: prefer a stable explicit id, otherwise fall back to position (the order of
+        # the window list is the app's own). patch() transfers the old id to the new node, so the
+        # top-level HWND is preserved and the window is NOT recreated when nothing structural
+        # changed.
+        my @old = @$old_vtrees;
+        my @paired;
+        for my $new_vtree (@$new_vtrees) {
+            my $old_idx;
+            for my $i ( 0 .. $#old ) {
+                next if $paired[$i];
+                if ( $old[$i]->id eq $new_vtree->id ) {
+                    $old_idx = $i;
+                    last;
+                }
+            }
+            unless ( defined $old_idx ) {
+                for my $i ( 0 .. $#old ) {
+                    next if $paired[$i];
+                    $old_idx = $i;
+                    last;
+                }
+            }
+            if ( defined $old_idx ) {
+                $paired[$old_idx] = 1;
+                $self->patch( $old[$old_idx], $new_vtree, $driver );
+            }
+            else {
+                $driver->mount($new_vtree);
+                $driver->mount_children($new_vtree);
+            }
+        }
+
+        # Destroy windows that are no longer present.
+        for my $i ( 0 .. $#old ) {
+            next                         if $paired[$i];
+            $driver->unmount( $old[$i] ) if $driver->can('unmount');
+        }
+    }
+
     method patch ( $old_node, $new_node, $driver ) {
         return unless $old_node && $new_node;
         $new_node->set_id( $old_node->id );
@@ -45,9 +88,7 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
 
         # Check options (ComboBox, ListBox) -- rebuild the item strings when they change.
         # Deliberately a semantic compare (value|label pairs), not arrayref stringification.
-        if ( ( $new_node->type eq 'combo_box' || $new_node->type eq 'list_box' )
-            && $self->_opts_key($old_node) ne $self->_opts_key($new_node) )
-        {
+        if ( ( $new_node->type eq 'combo_box' || $new_node->type eq 'list_box' ) && $self->_opts_key($old_node) ne $self->_opts_key($new_node) ) {
             $driver->set_prop( $new_node->id, 'options', $new_node->options );
         }
 

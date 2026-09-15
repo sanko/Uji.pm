@@ -12,7 +12,6 @@ use Uji::Layout;
 my $drv    = MockDriver->new;
 my $patch  = Uji::Reconciler->new;
 my $layout = Uji::Layout->new( driver => $drv );
-
 subtest 'node construction' => sub {
     my $cb = Uji::combo_box(
         value     => 'red',
@@ -20,18 +19,19 @@ subtest 'node construction' => sub {
         on_select => sub ($v) { { type => 'SET_COLOR', value => $v } },
     );
     my $lb = Uji::list_box( value => 1, options => [ { value => 1, label => 'One' } ] );
-    is $cb->type,     'combo_box', 'combo type is combo_box';
-    is $lb->type,     'list_box',  'list type is list_box';
-    is $cb->value,    'red',       'combo value';
-    is $cb->editable, 0,           'combo is not editable by default';
-    is $cb->options->[1]{label}, 'Green', 'combo options';
-    is $lb->value,    1,   'list value';
-    is $lb->on_select, undef, 'list without handler defaults to undef';
+    is $cb->type,                'combo_box', 'combo type is combo_box';
+    is $lb->type,                'list_box',  'list type is list_box';
+    is $cb->value,               'red',       'combo value';
+    is $cb->editable,            0,           'combo is not editable by default';
+    is $cb->options->[1]{label}, 'Green',     'combo options';
+    is $lb->value,               1,           'list value';
+    is $lb->on_select,           undef,       'list without handler defaults to undef';
 };
 
 # Render the first frame and check intrinsic sizing for combo (field + dropped list) vs list (rows).
 my $build = sub ( $color, $count, $list_opts ) {
     Uji::window(
+        id    => 'main',
         title => 't',
         w     => 360,
         h     => 400,
@@ -49,7 +49,7 @@ my $build = sub ( $color, $count, $list_opts ) {
                     options   => [ map { { value => $_, label => $_ . ' ' x 10 } } 1 .. $list_opts ],
                     on_select => sub ($v) { { type => 'SET_COUNT', value => $v } }
                 ),
-                Uji::text( 'Picker' )
+                Uji::text('Picker')
             ]
         )
     );
@@ -74,9 +74,9 @@ is $new_lb->id, $old_lb->id, 'list id preserved across render';
 my @cb_value = grep { $_->[1] eq $new_cb->id && $_->[2] eq 'value' } @{ $drv->calls };
 my @cb_opts  = grep { $_->[1] eq $new_cb->id && $_->[2] eq 'options' } @{ $drv->calls };
 my @lb_opts  = grep { $_->[1] eq $new_lb->id && $_->[2] eq 'options' } @{ $drv->calls };
-is scalar @cb_value, 1,            'combo value pushed exactly once';
-is scalar @cb_opts,  0,            'combo options untouched when unchanged';
-is scalar @lb_opts,  0,            'list options untouched when unchanged';
+is scalar @cb_value,              1,     'combo value pushed exactly once';
+is scalar @cb_opts,               0,     'combo options untouched when unchanged';
+is scalar @lb_opts,               0,     'list options untouched when unchanged';
 is $drv->checks->{ $new_cb->id }, 'red', 'reconciled combo value recorded';
 
 # 2. Change list value + list options (and shrink) -> options rebuilt once, value pushed once.
@@ -90,10 +90,10 @@ is $newer_lb->id, $old_lb->id, 'list id survives second render';
 my @cb_value2 = grep { $_->[1] eq $newer_cb->id && $_->[2] eq 'value' } @{ $drv->calls };
 my @lb_value2 = grep { $_->[1] eq $newer_lb->id && $_->[2] eq 'value' } @{ $drv->calls };
 my @lb_opts2  = grep { $_->[1] eq $newer_lb->id && $_->[2] eq 'options' } @{ $drv->calls };
-is scalar @cb_value2, 1, 'combo value not re-pushed when unchanged';
-is scalar @lb_value2, 1, 'list value pushed exactly once';
-is scalar @lb_opts2,  1, 'list options rebuilt exactly once when they changed';
+is scalar @cb_value2, 1,  'combo value not re-pushed when unchanged';
+is scalar @lb_value2, 1,  'list value pushed exactly once';
+is scalar @lb_opts2,  1,  'list options rebuilt exactly once when they changed';
 is $newer_lb->bh,     40, 'list shrank to 2 rows (36+4)';
-is $lb_value2[0][3], 2,   'list value pushed with the new value';
+is $lb_value2[0][3],  2,  'list value pushed with the new value';
 #
 done_testing;

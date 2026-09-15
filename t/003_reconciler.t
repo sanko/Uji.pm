@@ -14,6 +14,7 @@ my $patch  = Uji::Reconciler->new;
 my $layout = Uji::Layout->new( driver => $drv );
 my $build  = sub ( $dark, $color ) {
     Uji::window(
+        id    => 'main',
         title => 't',
         w     => 360,
         h     => 400,

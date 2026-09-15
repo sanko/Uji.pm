@@ -67,12 +67,12 @@ package main {
         Uji::window(
             title     => $model->{title} // 'Application',
             w         => 380,
-            h         => 600,
+            h         => 620,
             topmost   => $model->{topmost},
             min_w     => $model->{constrained} ? 300 : 0,
             max_w     => $model->{constrained} ? 500 : 0,
             min_h     => $model->{constrained} ? 200 : 0,
-            max_h     => $model->{constrained} ? 600 : 0,
+            max_h     => $model->{constrained} ? 620 : 0,
             centered  => 1,
             resizable => 1,
             child     => Uji::column(

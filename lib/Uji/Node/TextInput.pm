@@ -9,7 +9,7 @@ class Uji::Node::TextInput v0.0.1 : isa(Uji::Node) {
     field $focused     : param : reader = 0;
     field $multiline   : param : reader = 0;
     field $placeholder : param : reader = undef;
-    sub _type {'text_input'}
+    sub _type                {'text_input'}
     method _mount_only_props { $multiline ? [] : ['multiline'] }
 };
 1;

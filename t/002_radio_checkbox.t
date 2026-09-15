@@ -34,11 +34,11 @@ is $rg2->children->[0]->selected, 1,              'second instance selects its o
 isnt $rg2->children->[0]->id,     $kids->[0]->id, 'independent instances get fresh child ids';
 
 # Helper constructors coexist with the rest of the DSL
-is Uji::column()->type,                'column', 'column helper';
-is Uji::row()->type,                   'row',    'row helper';
-is Uji::text('hi')->label,             'hi',     'text helper';
-is Uji::button( label => 'B' )->type,  'button', 'button helper';
-is Uji::window( title => 't' )->title, 't',      'window helper';
+is Uji::column()->type,                              'column', 'column helper';
+is Uji::row()->type,                                 'row',    'row helper';
+is Uji::text('hi')->label,                           'hi',     'text helper';
+is Uji::button( label => 'B' )->type,                'button', 'button helper';
+is Uji::window( id => 'main', title => 't' )->title, 't',      'window helper';
 
 # Layout treats radio_group like a vertical column
 my $col = Uji::column(
@@ -47,7 +47,7 @@ my $col = Uji::column(
         Uji::text('tail')
     ]
 );
-my $tree   = Uji::window( title => 't', w => 300, h => 200, child => $col );
+my $tree   = Uji::window( id => 'main', title => 't', w => 300, h => 200, child => $col );
 my $drv    = MockDriver->new;
 my $layout = Uji::Layout->new( driver => $drv );
 $layout->compute( $tree, 0, 0, 300, 200 );

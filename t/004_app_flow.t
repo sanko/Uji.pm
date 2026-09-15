@@ -26,6 +26,7 @@ my $update = sub ( $msg, $model ) {
 };
 my $view = sub ($model) {
     Uji::window(
+        id       => 'main',
         title    => $model->{title},
         w        => 380,
         h        => 600,
@@ -71,7 +72,7 @@ my $drv  = MockDriver->new;
 my $chan = Canned::Channel->new;
 my $app  = Uji::App->new( init => sub { ( $model0, undef ) }, update => $update, view => $view, driver => $drv, channel => $chan );
 $app->_boot;    # init + mount + layout
-my $cb = $find->( $app->vtree, 'checkbox' );
+my $cb = $find->( $app->vtrees->[0], 'checkbox' );
 ok $cb, 'checkbox present in mounted vtree';
 is $app->model->{dark}, 0, 'model starts dark=0';
 #
@@ -88,12 +89,12 @@ subtest Checkbox => sub {    # click round-trip
     $app->_drain_and_render( $chan->get );
     is $app->model->{dark},       1, 'TOGGLE_DARK reached the model';
     is $drv->checks->{ $cb->id }, 1, 'checkbox stays checked after render';
-    like $app->vtree->child->children->[1]->label, qr/Dark: ON/, 'view label reflected dark=ON';
-    my $cb2 = $find->( $app->vtree, 'checkbox' );
+    like $app->vtrees->[0]->child->children->[1]->label, qr/Dark: ON/, 'view label reflected dark=ON';
+    my $cb2 = $find->( $app->vtrees->[0], 'checkbox' );
     is $cb2->id, $cb->id, 'checkbox id stable across renders';
 };
 subtest radio => sub {    # Radio select round-trip
-    my @rg_nodes = $find->( $app->vtree, 'radio' );
+    my @rg_nodes = $find->( $app->vtrees->[0], 'radio' );
     is scalar @rg_nodes, 3, 'three radio buttons in mounted vtree';
 
     # user clicks "Red": Windows checks it and unchecks its group siblings
@@ -102,14 +103,58 @@ subtest radio => sub {    # Radio select round-trip
     $chan->put( $red->on_select->('red') );
     $app->_drain_and_render( $chan->get );
     is $app->model->{color}, 'red', 'SET_COLOR reached the model';
-    my @radios2 = $find->( $app->vtree, 'radio' );
+    my @radios2 = $find->( $app->vtrees->[0], 'radio' );
     my $red2    = ( grep { $_->value eq 'red' } @radios2 )[0];
     my $blue2   = ( grep { $_->value eq 'blue' } @radios2 )[0];
     is $drv->checks->{ $red2->id },  1,        'red radio checked';
     is $drv->checks->{ $blue2->id }, 0,        'blue radio unchecked';
     is $red2->id,                    $red->id, 'red radio id stable across renders';
-    my @color_text = grep { $_->type eq 'text' && $_->label =~ /^Color:/ } @{ $all_nodes->( $app->vtree ) };
+    my @color_text = grep { $_->type eq 'text' && $_->label =~ /^Color:/ } @{ $all_nodes->( $app->vtrees->[0] ) };
     like $color_text[0]->label, qr/Color: red/, 'view label reflected color=red';
+};
+subtest 'flex row stays inside the auto-id window after re-render' => sub {
+
+    # Regression: view() rebuilds the window node with a fresh auto-generated id, which is not yet
+    # in the driver's surface map when App::_render calls sync_window_bounds, so the window node
+    # kept its zero bounds and Layout::compute fell back to its 800px default. Every child came
+    # out ~2.5x too wide and the reset button ended up off-screen.
+    my $drv2  = MockDriver->new;
+    my $chan2 = Canned::Channel->new;
+    my $view2 = sub ($m) {
+        Uji::window(
+            w     => 360,
+            h     => 400,
+            child => Uji::column(
+                padding  => 15,
+                spacing  => 12,
+                children => [
+                    Uji::text( 'Count: ' . $m->{count} ),
+                    Uji::row(
+                        spacing  => 10,
+                        children => [
+                            Uji::button( label => '-1',    on_click => { type => 'INCREMENT' } ),
+                            Uji::button( label => '+1',    flex     => 1, on_click => { type => 'INCREMENT' } ),
+                            Uji::button( label => 'Reset', on_click => { type => 'INCREMENT' } ),
+                        ],
+                    ),
+                ],
+            ),
+        );
+    };
+    my $app2 = Uji::App->new( init => sub { ( { count => 0 }, undef ) }, update => $update, view => $view2, driver => $drv2, channel => $chan2 );
+    $app2->_boot;
+    for my $pass ( 1 .. 2 ) {
+        my $win   = $app2->vtrees->[0];
+        my @btns  = grep { $_->type eq 'button' } @{ $all_nodes->($win) };
+        my $plus  = ( grep { $_->label eq '+1' } @btns )[0];
+        my $reset = ( grep { $_->label eq 'Reset' } @btns )[0];
+        is $win->bw, 360, "auto-id window keeps its 360px client width after render pass $pass";
+        cmp_ok $plus->bw, '<=', 360 - 30, "flex +1 button fits inside the client after pass $pass";
+        is $reset->bx + $reset->bw, 360 - 15, "row ends flush with the inner right edge after pass $pass";
+        last if $pass == 2;
+        $chan2->put( { type => 'INCREMENT' } );
+        $app2->_drain_and_render( $chan2->get );
+    }
 };
 #
 done_testing;
