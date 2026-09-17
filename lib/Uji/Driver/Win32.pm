@@ -15,14 +15,14 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     field $on_resize       : reader(_get_resize_handler) = undef;
     field $on_modal_pump   : reader(_get_modal_pump)     = undef;    # synchronous tick/render hook for modal loops
     field $suppress_events : reader(_is_suppressed)      = 0;
-    field $item_pins   = {};      # hwnd -> [ malloc'd UTF-16 item strings still referenced by the control ]
-    field $brush_cache = {};      # '#RRGGBB' -> HBRUSH
-    field $font_cache  = {};      # 'Name|Size' -> HFONT
+    field $item_pins   = {};                                         # hwnd -> [ malloc'd UTF-16 item strings still referenced by the control ]
+    field $brush_cache = {};                                         # '#RRGGBB' -> HBRUSH
+    field $font_cache  = {};                                         # 'Name|Size' -> HFONT
     field $cmd_counter = 0x4000
         ; # monotonic idCommand allocator for toolbar buttons AND menu items (WM_COMMAND needs idCommand; IDs in the 0x4000+ range avoid control-id collisions)
     field $toolbar_cmds = {};    # idCommand -> toolbar vnode id (WM_COMMAND routing)
     field $menu_cmds    = {};    # idCommand -> { win_id => surface_id } (WM_COMMAND routing for menu items)
-    field $modal_timer = 0;      # 1 while a frame-drag modal loop drives the WM_TIMER pump
+    field $modal_timer  = 0;     # 1 while a frame-drag modal loop drives the WM_TIMER pump
     field $prompt_hwnd;          # live prompt_dialog window (modal EDIT + OK/Cancel)
     field $prompt_edit;          # the EDIT child of the current prompt_dialog
     field $prompt_done = 0;      # modal loop exit flag (OK / Cancel / WM_CLOSE)
@@ -351,7 +351,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $cv->{style}         = 0x0000;
         $cv->{lpfnWndProc}   = $viewport_proc;
         $cv->{hInstance}     = undef;
-        $cv->{hbrBackground} = cast( 16, Pointer [Void] );    # COLOR_BTNFACE + 1
+        $cv->{hbrBackground} = cast( 16, Pointer [Void] );                            # COLOR_BTNFACE + 1
         $cv->{lpszClassName} = $viewport_class = 'UjiViewportClass' . ++$class_seq;
         $cv->{hCursor}       = LoadCursorW( undef, 32512 );
         RegisterClassExW($vclass);
@@ -435,7 +435,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $cp->{style}         = 0x0000;
         $cp->{lpfnWndProc}   = $prompt_proc;
         $cp->{hInstance}     = undef;
-        $cp->{hbrBackground} = cast( 0, Pointer [Void] );     # COLOR_WINDOW: white body
+        $cp->{hbrBackground} = cast( 0, Pointer [Void] );                         # COLOR_WINDOW: white body
         $cp->{lpszClassName} = $prompt_class = 'UjiPromptClass' . ++$class_seq;
         $cp->{hCursor}       = LoadCursorW( undef, 32512 );
         RegisterClassExW($pclass);
@@ -634,6 +634,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             my $id     = $self->_registry_id_by_key( $from, 'hwnd' ) or return ( 0, undef );
             my $record = $registry->{$id}                            or return ( 0, undef );
             my $node   = $record->{node}                             or return ( 0, undef );
+
             # TCN_SELCHANGE (-551): the user clicked a tab. Sync the record's live index, flip
             # the visible panel subtree, and dispatch on_select with the new index.
             # (TCN_SELCHANGING is -552 and is ignored; only the change matters.)
@@ -645,6 +646,22 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                     my $action = $node->on_select->($idx);
                     $self->channel->put($action) if $action;
                 }
+                return ( 1, 0 );
+            }
+
+            # DTN_DATETIMECHANGE (-760): the user changed the date/time in a SysDateTimePick32.
+            # NMDATETIMECHANGE is NMHDR(24 on this x64 NMHDR) + dwFlags(4) + SYSTEMTIME st(16)
+            # = 44 bytes total; the freshly edited date lands at st's raw offsets 28 (wYear),
+            # 30 (wMonth) and 34 (wDay). Complete it to an ISO-8601 date and push it through
+            # on_change exactly like the slider/spin value protocol. (dwFlags tells GDT_VALID vs
+            # GDT_NONE; a cleared checkbox -> the empty string is reported as-is so the app can
+            # react to a "no date" choice.)
+            if ( $node->type eq 'date_picker' && $nm->{code} == -760 ) {
+                my $raw = Affix::raw( $lparam, 44 );
+                my ( $y, $m, undef, $d ) = unpack( 'v4', substr( $raw, 28, 8 ) );
+                my $iso    = $d                                          ? sprintf( '%04d-%02d-%02d', $y, $m, $d ) : '';
+                my $action = $node->can('on_change') && $node->on_change ? $node->on_change->($iso)                : undef;
+                $self->channel->put($action) if $action;
                 return ( 1, 0 );
             }
 
@@ -672,6 +689,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 my $lv = $record->{listview};
                 if ( $lv && $node->sortable ) {
                     my $raw = Affix::raw( $lparam, 40 );
+
                     # NMLISTVIEW.iSubItem. Post-reorder, the native header reports the column by its
                     # MODEL identity (its index in the column array), not the visual slot it displays
                     # in — so a header drag + click does NOT map back through lv_column_order (that
@@ -699,7 +717,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 my $raw = Affix::raw( $lparam, 64 );
                 my $iit = unpack( 'l<', substr( $raw, 24, 4 ) );
                 my $nst = unpack( 'L<', substr( $raw, 32, 4 ) );
-                return ( 1, 0 ) unless $nst & 0x0002;    # LVIS_SELECTED
+                return ( 1, 0 ) unless $nst & 0x0002;         # LVIS_SELECTED
                 return ( 1, 0 ) unless $record->{listview};
                 my $selected;
                 if ( $node->multiple ) {
@@ -948,8 +966,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
 
         # WS_OVERLAPPEDWINDOW (0x10CF0000); drop WS_THICKFRAME (0x00040000) when not resizable
         my $style = $vtree->resizable ? 0x10CF0000 : 0x10CB0000;
-        my $hwnd
-            = CreateWindowExW( 0, $win_class, $self->_nz( $vtree->title ), $style, 100, 100, $vtree->w, $vtree->h, undef, 0, undef, undef );
+        my $hwnd  = CreateWindowExW( 0, $win_class, $self->_nz( $vtree->title ), $style, 100, 100, $vtree->w, $vtree->h, undef, 0, undef, undef );
         $registry->{ $vtree->id } = { hwnd => $hwnd, node => $vtree, surface => $surface_id };
         $surfaces->{$surface_id}  = { hwnd => $hwnd, node => $vtree, records => {} };
         $surface_by_hwnd->{$hwnd} = $surface_id;
@@ -1200,6 +1217,16 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TBS_AUTOTICKS (0x1) | TBS_HORZ (0x0) or TBS_VERT (0x80)
             $style = 0x54000001 | ( $vnode->orientation eq 'vertical' ? 0x0080 : 0x0000 );
         }
+        elsif ( $vnode->type eq 'date_picker' ) {
+            $class = 'SysDateTimePick32';
+
+            # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS (0x54000000) | DTS_SHOWNONE (0x2: the edit has a
+            # checkbox that clears the date) | DTS_SHORTDATEFORMAT (0x0) or DTS_LONGDATEFORMAT (0x4).
+            $style = 0x54000004;
+            if ( $vnode->format eq 'short' ) { $style = 0x54000000; }
+            $style |= 0x54000002 if $self->_nz( $vnode->show_none );
+            $style |= 0x54000001 if $self->_nz( $vnode->useynavigate );
+        }
         elsif ( $vnode->type eq 'spin_box' ) {
             $class = 'EDIT';
 
@@ -1384,16 +1411,38 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         if ( $vnode->type eq 'slider' ) {
 
             # TBM_SETRANGE (0x0401): (max << 16) | min, wParam = redraw
-            SendMessageW( $hwnd, 0x0401, 1, ( $vnode->max << 16 ) | $vnode->min );
+            SendMessageW( $hwnd, 0x0401, 1, ( $vnode->max << 16 ) | $vnode->min );       # TBM_SETRANGE
             SendMessageW( $hwnd, 0x0405, 1, $vnode->value );                             # TBM_SETPOS
             SendMessageW( $hwnd, 0x041C, 1, $vnode->step );                              # TBM_SETLINESIZE
             SendMessageW( $hwnd, 0x041D, 1, $vnode->step );                              # TBM_SETPAGESIZE
         }
+        if ( $vnode->type eq 'date_picker' ) {
+            my $y = $vnode->year  // 0;
+            my $m = $vnode->month // 1;
+            my $d = $vnode->day   // 1;
+
+            # SYSTEMTIME = 8 x u16: year, month, dayOfWeek, day, hour, minute, second, ms (16 bytes LE).
+            my $st  = pack( 'S8', $y, $m, 0, $d, 0, 0, 0, 0 );
+            my $buf = malloc(16);
+            memcpy( $buf, $st, 16 );
+            SendMessageW( $hwnd, 0x1002, 0, Affix::address($buf) );                      # DTM_SETSYSTEMTIME wParam=GDT_VALID(0)
+            free($buf);
+
+            # DTM_SETRANGE (0x1004): wParam = GDTR_MIN|GDTR_MAX (0x3); lParam -> SYSTEMTIME min then max.
+            if ( ( defined $vnode->min_year || defined $vnode->min_month ) || ( defined $vnode->max_year || defined $vnode->max_month ) ) {
+                my $lo = pack( 'S8', $vnode->min_year // 1601, $vnode->min_month // 1,  0, $vnode->min_day // 1,  0, 0, 0, 0 );
+                my $hi = pack( 'S8', $vnode->max_year // 9999, $vnode->max_month // 12, 0, $vnode->max_day // 31, 0, 0, 0, 0 );
+                my $rb = malloc(32);
+                memcpy( $rb, $lo . $hi, 32 );
+                SendMessageW( $hwnd, 0x1004, 0x3, Affix::address($rb) );
+                free($rb);
+            }
+        }
         if ( $vnode->type eq 'checkbox' ) {
-            SendMessageW( $hwnd, 0x00F1, $vnode->checked ? 1 : 0, 0 );                   # BM_SETCHECK
+            SendMessageW( $hwnd, 0x00F1, $vnode->checked ? 1 : 0, 0 );    # BM_SETCHECK
         }
         if ( $vnode->type eq 'toggle_switch' || $vnode->type eq 'toggle_button' ) {
-            SendMessageW( $hwnd, 0x00F1, $vnode->checked ? 1 : 0, 0 );                   # BM_SETCHECK
+            SendMessageW( $hwnd, 0x00F1, $vnode->checked ? 1 : 0, 0 );    # BM_SETCHECK
         }
         if ( $vnode->type eq 'spin_box' ) {
             $self->_mount_spin_buddy( $parent_hwnd, $vnode );
@@ -1437,7 +1486,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         # slot table (row index -> { value }) built during populate so LVN_ITEMCHANGED's iItem can
         # be mapped straight back to the model value (the same trick as the tree's slot table).
         if ( $vnode->type eq 'list_view' ) {
-            my $ex = 0x00010000;    # LVS_EX_DOUBLEBUFFER: flicker-free repaints
+            my $ex = 0x00010000;                             # LVS_EX_DOUBLEBUFFER: flicker-free repaints
             $ex |= 0x00000020 if $vnode->full_row_select;    # LVS_EX_FULLROWSELECT
             $ex |= 0x00000001 if $vnode->grid_lines;         # LVS_EX_GRIDLINES
             $ex |= 0x00000010 if $vnode->reorderable;        # LVS_EX_HEADERDRAGDROP: drag header items to reorder columns
@@ -1669,7 +1718,18 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             if ( $vn->min_h && $nh < $vn->min_h ) { $nh = $vn->min_h }
             if ( $vn->max_w && $nw > $vn->max_w ) { $nw = $vn->max_w }
             if ( $vn->max_h && $nh > $vn->max_h ) { $nh = $vn->max_h }
-            $self->_set_window_outer( $record->{hwnd}, $nw, $nh ) if $nw != $cw || $nh != $ch;
+            if ( $nw != $cw || $nh != $ch ) {
+
+                # The frame snapped to the new constraint. Mirror what WM_SIZE does for a manual
+                # resize so children re-layout against the new client size: fire the app's resize
+                # handler with the clamped client dimensions. (A bare SetWindowPos of a frame that
+                # was already at the target would not deliver a WM_SIZE with a delta, and even when
+                # it does the resize handler is the single source of truth for the reflow.)
+                $self->_set_window_outer( $record->{hwnd}, $nw, $nh );
+                my $surface_id = $self->surface_by_hwnd->{ $record->{hwnd} };
+                my $rb         = $self->_get_resize_handler;
+                $rb->( $surface_id, $nw, $nh ) if $rb && $surface_id;
+            }
         }
         elsif ( $prop_name eq 'label' ) {
             if ( $record->{node}->type eq 'status_bar' ) {
@@ -1710,6 +1770,20 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $self->_apply_tab($vnode_id);
         }
         elsif ( $prop_name eq 'value' ) {
+            if ( $record->{node}->type eq 'date_picker' ) {
+
+                # DTM_SETSYSTEMTIME (0x1002): wParam = GDT_VALID (0), lParam -> SYSTEMTIME.
+                # Write in the mount-init style: 8 x u16 = year, month, dayOfWeek(=0), day, hour,
+                # minute, second, ms (16 bytes LE). Empty/unparsable value clears the control the
+                # way the mount-time "no date" path does (year=0 -> the control shows nothing).
+                my ( $y, $m, $d ) = $value =~ /^(\d{4})-(\d{2})-(\d{2})$/ ? ( $1, $2, $3 ) : ( 0, 0, 0 );
+                my $st  = pack( 'S8', $y, $m, 0, $d, 0, 0, 0, 0 );
+                my $buf = malloc(16);
+                memcpy( $buf, $st, 16 );
+                SendMessageW( $record->{hwnd}, 0x1002, 0, Affix::address($buf) );
+                free($buf);
+                return;
+            }
             if ( $record->{node}->type eq 'slider' ) {
                 SendMessageW( $record->{hwnd}, 0x0405, 1, $value );
                 return;
@@ -1854,6 +1928,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         }
         elsif ( $prop_name eq 'rows' || $prop_name eq 'columns' ) {    # list_view: rebuild the table + reselect
             return unless $record->{node}->type eq 'list_view';
+
             # 'rows' reuses the live columns (widths + drag order survive); 'columns' recreates them.
             $self->_populate_listview( $vnode_id, $prop_name eq 'rows' ? 1 : 0 );
         }
@@ -2482,17 +2557,16 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         # the definitions actually changed (set_prop('columns') or first mount): a rows-only reconcile
         # (set_prop('rows')) reuses the live columns so user-resized widths and any drag-reordered
         # column order survive a sort.
-        SendMessageW( $hwnd, 0x1009, 0, 0 );                                       # LVM_DELETEALLITEMS
+        SendMessageW( $hwnd, 0x1009, 0, 0 );    # LVM_DELETEALLITEMS
         $lv->{slots} = [];
         $reuse_columns = 0 if ( $lv->{ncols} // 0 ) != scalar @{ $node->columns // [] };
         if ( !$reuse_columns ) {
             my $old_n = $lv->{ncols} // 0;
-            SendMessageW( $hwnd, 0x101C, 0, 0 ) while $old_n-- > 0;                # LVM_DELETECOLUMN(0)
+            SendMessageW( $hwnd, 0x101C, 0, 0 ) while $old_n-- > 0;    # LVM_DELETECOLUMN(0)
             $lv->{ncols} = 0;
         }
-
         my $cols = $node->columns;
-        $cols = [ { label => 'Items' } ] unless @$cols;                            # bare list safety net
+        $cols = [ { label => 'Items' } ] unless @$cols;                # bare list safety net
         if ( !$reuse_columns ) {
             for my $i ( 0 .. $#$cols ) {
                 my $sort  = $lv->{sort} && $lv->{sort}{col} == $i;
@@ -2501,40 +2575,35 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 my $width = $cols->[$i]{width};
                 if ( !$width ) {
                     my ($tw) = $self->measure_text($label);
-                    $width = ( $tw + 24 ) < 60 ? 60 : $tw + 24;                    # glyph padding + cushion
+                    $width = ( $tw + 24 ) < 60 ? 60 : $tw + 24;                        # glyph padding + cushion
                 }
                 my $fmt  = ( { left => 0, center => 2, right => 1 }->{ $cols->[$i]{align} // 'left' } // 0 );
-                my $wide  = Encode::encode( 'UTF-16LE', $self->_nz($label) ) . "\x00\x00";
-                my $abuf  = malloc( CORE::length($wide) );
+                my $wide = Encode::encode( 'UTF-16LE', $self->_nz($label) ) . "\x00\x00";
+                my $abuf = malloc( CORE::length($wide) );
                 memcpy( $abuf, $wide, CORE::length($wide) );
-                my $bytes = pack 'L< l< l< x4 q< l< l< l< l< l< l< l< L< q< l< x4',
-                    0x000F,                       # mask = LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM
-                    $fmt,                         # LVCFMT_LEFT/RIGHT/CENTER from `align`
-                    $width,                       # cx
-                    Affix::address($abuf),        # pszText
-                    0,                            # cchTextMax
-                    $i,                           # iSubItem
-                    0, 0, 0, 0, 0, 0,             # iImage/iOrder/cxMin/cxDefault/cxIdeal/iTitle
-                    0,                            # pszTitle
-                    0;                            # cbTitle
+                my $bytes = pack 'L< l< l< x4 q< l< l< l< l< l< l< l< L< q< l< x4', 0x000F,  # mask = LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM
+                    $fmt,                                                                    # LVCFMT_LEFT/RIGHT/CENTER from `align`
+                    $width,                                                                  # cx
+                    Affix::address($abuf),                                                   # pszText
+                    0,                                                                       # cchTextMax
+                    $i,                                                                      # iSubItem
+                    0, 0, 0, 0, 0, 0,                                                        # iImage/iOrder/cxMin/cxDefault/cxIdeal/iTitle
+                    0,                                                                       # pszTitle
+                    0;                                                                       # cbTitle
                 my $struct = malloc( length $bytes );
                 memcpy( $struct, $bytes, length $bytes );
-                SendMessageW( $hwnd, 0x1061, $i, Affix::address($struct) );        # LVM_INSERTCOLUMNW
+                SendMessageW( $hwnd, 0x1061, $i, Affix::address($struct) );                  # LVM_INSERTCOLUMNW
                 free($struct);
                 free($abuf);
             }
-            $lv->{ncols}  = scalar @$cols;
+            $lv->{ncols}    = scalar @$cols;
             $lv->{colorder} = [ 0 .. ( scalar @$cols ) - 1 ];
         }
-
         my $i = 0;
         for my $row ( @{ $node->rows // [] } ) {
             my $cells = ref $row eq 'HASH' ? $row->{columns} : $row;
-            my $value = ref $row eq 'HASH' ? $row->{value} : ( $cells->[0] // '' );
-            push @{ $lv->{slots} }, {
-                value   => $value,
-                columns => [ map { '' . ( $_ // '' ) } @{ $cells || [] } ],
-            };
+            my $value = ref $row eq 'HASH' ? $row->{value}   : ( $cells->[0] // '' );
+            push @{ $lv->{slots} }, { value => $value, columns => [ map { '' . ( $_ // '' ) } @{ $cells || [] } ], };
             $self->_lv_write_row( $hwnd, $i, $lv->{slots}[-1]{columns}, $node->columns );
             $i++;
         }
@@ -2566,19 +2635,19 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             my $wide = Encode::encode( 'UTF-16LE', $self->_nz($cell) ) . "\x00\x00";
             my $abuf = malloc( CORE::length($wide) );
             memcpy( $abuf, $wide, CORE::length($wide) );
-            my $bytes = pack $LVITEM,
-                0x0001,                       # mask = LVIF_TEXT
-                $row,                         # iItem
-                $c,                           # iSubItem
-                0, 0,                         # state / stateMask
-                Affix::address($abuf),        # pszText
-                0,                            # cchTextMax
-                0,                            # iImage
-                0,                            # lParam
-                0, 0, 0,                      # iIndent / iGroupId / cColumns
-                0, 0, 0;                      # puColumns / piColFmt / iGroup
+            my $bytes = pack $LVITEM, 0x0001,    # mask = LVIF_TEXT
+                $row,                            # iItem
+                $c,                              # iSubItem
+                0, 0,                            # state / stateMask
+                Affix::address($abuf),           # pszText
+                0,                               # cchTextMax
+                0,                               # iImage
+                0,                               # lParam
+                0, 0, 0,                         # iIndent / iGroupId / cColumns
+                0, 0, 0;                         # puColumns / piColFmt / iGroup
             my $struct = malloc( length $bytes );
             memcpy( $struct, $bytes, length $bytes );
+
             if ( $c == 0 ) {
                 SendMessageW( $hwnd, 0x104D, $row, Affix::address($struct) );    # LVM_INSERTITEMW
             }
@@ -2601,10 +2670,10 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     # selection has been reset by LVM_DELETEALLITEMS), or 'snapshot' (user click - preserved from
     # the native control before the rebuild).
     method _sort_listview ( $id, $col, $dir, $want = 'snapshot' ) {
-        my $rec  = $registry->{$id} or return;
-        my $hwnd = $rec->{hwnd}     or return;
-        my $node = $rec->{node}     or return;
-        my $lv   = $rec->{listview} or return;
+        my $rec   = $registry->{$id} or return;
+        my $hwnd  = $rec->{hwnd}     or return;
+        my $node  = $rec->{node}     or return;
+        my $lv    = $rec->{listview} or return;
         my $ncols = $lv->{ncols} // 0;
         return if $col < 0 || $col >= $ncols;
         my $numeric = ( ( $node->columns->[$col] // {} )->{sort} // 'text' ) eq 'numeric';
@@ -2623,23 +2692,20 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 $sel{ ( $lv->{slots}[$i]{value} // '' ) } = 1 if $st & 0x0002;
             }
         }
-
         my $cell = sub ($i) {
             my $cs = $lv->{slots}[$i]{columns};
             return $cs ? ( '' . ( $cs->[$col] // '' ) ) : '';
         };
         my @order = 0 .. $#{ $lv->{slots} };
         @order = sort {
-            my $cmp = $numeric
-                ? ( ( $cell->($a) + 0 ) <=> ( $cell->($b) + 0 ) )
-                : ( lc( $cell->($a) ) cmp lc( $cell->($b) ) );
+            my $cmp = $numeric ? ( ( $cell->($a) + 0 ) <=> ( $cell->($b) + 0 ) ) : ( lc( $cell->($a) ) cmp lc( $cell->($b) ) );
             return $cmp if $cmp;
             ( ( $lv->{slots}[$a]{value} // '' ) cmp ( $lv->{slots}[$b]{value} // '' ) );    # stable tiebreak
         } @order;
         @order = reverse @order if $dir eq 'desc';
 
         # Rebuild the native rows in the sorted order.
-        SendMessageW( $hwnd, 0x1009, 0, 0 );    # LVM_DELETEALLITEMS
+        SendMessageW( $hwnd, 0x1009, 0, 0 );                                                # LVM_DELETEALLITEMS
         my $i = 0;
         for my $oi (@order) {
             $self->_lv_write_row( $hwnd, $i, $lv->{slots}[$oi]{columns}, $node->columns );
@@ -2654,17 +2720,16 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $suppress_events = 1;
         for my $i ( 0 .. $#{ $lv->{slots} } ) {
             next unless $sel{ $lv->{slots}[$i]{value} // '' };
-            my $selb = pack $LVITEM,
-                0x0008, $i, 0, 0x0002, 0x0002, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0;    # LVIF_STATE, state=LVIS_SELECTED
+            my $selb = pack $LVITEM, 0x0008, $i, 0, 0x0002, 0x0002, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0;    # LVIF_STATE, state=LVIS_SELECTED
             my $sbuf = malloc( length $selb );
             memcpy( $sbuf, $selb, length $selb );
-            SendMessageW( $hwnd, 0x102B, $i, Affix::address($sbuf) );    # LVM_SETITEMSTATE
+            SendMessageW( $hwnd, 0x102B, $i, Affix::address($sbuf) );                                # LVM_SETITEMSTATE
             free($sbuf);
         }
         $suppress_events = 0;
         for my $i ( 0 .. $#{ $lv->{slots} } ) {
             next unless $sel{ $lv->{slots}[$i]{value} // '' };
-            SendMessageW( $hwnd, 0x1013, 1, $i );    # LVM_ENSUREVISIBLE
+            SendMessageW( $hwnd, 0x1013, 1, $i );                                                    # LVM_ENSUREVISIBLE
             last unless $node->multiple;
         }
     }
@@ -2676,7 +2741,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         SendMessageW( $hwnd, 0x103B, $n, Affix::address($buf) );    # LVM_GETCOLUMNORDERARRAY
         my $raw = Affix::raw( $buf, $n * 4 );
         free($buf);
-        return [ unpack( ( 'l<' ) x $n, $raw ) ];
+        return [ unpack( ('l<') x $n, $raw ) ];
     }
 
     # Portable header-click seam (contract in Uji::Driver): simulate the user clicking the header of
@@ -2690,18 +2755,18 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     # header drag has placed it, so no visual-slot remap is applied (that is what the model-4 test
     # pins down).
     method list_view_click_column ( $node, $model_col ) {
-        my $id  = $node->id              or return;
-        my $rec = $self->_get_registry_record($id) or return;
-        my $hwnd   = $rec->{hwnd}  or return;
-        my $parent = $rec->{parent_hwnd} or return;
+        my $id     = $node->id                        or return;
+        my $rec    = $self->_get_registry_record($id) or return;
+        my $hwnd   = $rec->{hwnd}                     or return;
+        my $parent = $rec->{parent_hwnd}              or return;
         my $nmhdr  = "\0" x 64;
-        substr( $nmhdr, 0, 8 )  = pack( 'q<', $hwnd );            # hwndFrom = the list-view control
-        substr( $nmhdr, 16, 4 ) = pack( 'l<', -108 );              # code = LVN_COLUMNCLICK
-        substr( $nmhdr, 24, 4 ) = pack( 'l<', -1 );                # iItem (unused)
-        substr( $nmhdr, 28, 4 ) = pack( 'l<', $model_col );        # iSubItem = MODEL identity
+        substr( $nmhdr, 0, 8 )  = pack( 'q<', $hwnd );               # hwndFrom = the list-view control
+        substr( $nmhdr, 16, 4 ) = pack( 'l<', -108 );                # code = LVN_COLUMNCLICK
+        substr( $nmhdr, 24, 4 ) = pack( 'l<', -1 );                  # iItem (unused)
+        substr( $nmhdr, 28, 4 ) = pack( 'l<', $model_col );          # iSubItem = MODEL identity
         my $buf = malloc(64);
         memcpy( $buf, $nmhdr, 64 );
-        SendMessageW( $parent, 0x004E, 0, Affix::address($buf) );  # WM_NOTIFY to the PARENT window
+        SendMessageW( $parent, 0x004E, 0, Affix::address($buf) );    # WM_NOTIFY to the PARENT window
         free($buf);
         for ( 1 .. 20 ) { $self->poll_events }
         return;
@@ -2713,10 +2778,10 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     # follows the item wherever a header drag has placed it, so no visual-index mapping is needed and
     # neither the user-resized widths nor a drag-reordered column order are disturbed.
     method _apply_sort_indicator ( $id, $from_col, $to_col, $dir ) {
-        my $rec  = $registry->{$id} or return;
-        my $hwnd = $rec->{hwnd}     or return;
-        my $node = $rec->{node}     or return;
-        my $lv   = $rec->{listview} or return;
+        my $rec   = $registry->{$id} or return;
+        my $hwnd  = $rec->{hwnd}     or return;
+        my $node  = $rec->{node}     or return;
+        my $lv    = $rec->{listview} or return;
         my $ncols = $lv->{ncols} // 0;
         if ( defined $from_col && $from_col < $ncols ) {
             my $label = ( $node->columns->[$from_col] // {} )->{label} // '';
@@ -2732,11 +2797,11 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     # In-place header label replacement for one column (LVM_SETCOLUMNW with LVCF_TEXT only). The text
     # buffer is copied by the control during the call, so it is freed immediately after.
     method _set_header_label ( $hwnd, $vis, $label ) {
-        my $wide  = Encode::encode( 'UTF-16LE', $self->_nz($label) ) . "\x00\x00";
-        my $abuf  = malloc( CORE::length($wide) );
+        my $wide = Encode::encode( 'UTF-16LE', $self->_nz($label) ) . "\x00\x00";
+        my $abuf = malloc( CORE::length($wide) );
         memcpy( $abuf, $wide, CORE::length($wide) );
-        my $bytes = pack 'L< l< l< x4 q< l< l< l< l< l< l< l< L< q< l< x4',
-            0x0004, 0, 0, Affix::address($abuf), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0;    # LVCF_TEXT
+        my $bytes = pack 'L< l< l< x4 q< l< l< l< l< l< l< l< L< q< l< x4', 0x0004, 0, 0, Affix::address($abuf), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0;    # LVCF_TEXT
         my $struct = malloc( length $bytes );
         memcpy( $struct, $bytes, length $bytes );
         SendMessageW( $hwnd, 0x1060, $vis, Affix::address($struct) );    # LVM_SETCOLUMNW
@@ -2753,9 +2818,9 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         for my $id ( keys %$registry ) {
             my $rec = $registry->{$id} or next;
             next unless $rec->{node} && $rec->{node}->type eq 'list_view' && $rec->{node}->reorderable;
-            my $lv    = $rec->{listview} or next;
-            my $hwnd  = $rec->{hwnd}     or next;
-            my $n     = $lv->{ncols} // 0;
+            my $lv   = $rec->{listview} or next;
+            my $hwnd = $rec->{hwnd}     or next;
+            my $n    = $lv->{ncols} // 0;
             next unless $n;
             my $order = $self->lv_column_order( $hwnd, $n );
             my $have  = $lv->{colorder} ||= [ 0 .. $n - 1 ];
@@ -2763,8 +2828,9 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             for my $i ( 0 .. $n - 1 ) { $same = 0 if ( $order->[$i] // -1 ) != ( $have->[$i] // -1 ); }
             next if $same;
             $lv->{colorder} = $order;
+
             if ( $rec->{node}->can('on_reorder') && $rec->{node}->on_reorder ) {
-                my $action = $rec->{node}->on_reorder->( [ @$order ] );
+                my $action = $rec->{node}->on_reorder->( [@$order] );
                 $self->channel->put($action) if $action;
             }
         }
@@ -2776,27 +2842,25 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     # selected and scrolled into view (LVM_ENSUREVISIBLE). Selection is suppressed while it runs so
     # the native LVN_ITEMCHANGED echo never dispatches a bogus on_select.
     method _select_listvalue ( $id, $value ) {
-        my $rec  = $registry->{$id} or return;
-        my $hwnd = $rec->{hwnd}     or return;
-        my $lv   = $rec->{listview} or return;
-        my $want = ref $value eq 'ARRAY' ? $value : [ defined $value ? $value : () ];
-
-        my $clear = pack $LVITEM,
-            0x0008, 0, 0, 0, 0x0002, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0;    # LVIF_STATE, iItem=0, state=0, stateMask=LVIS_SELECTED
-        my $cbuf = malloc( length $clear );
+        my $rec   = $registry->{$id} or return;
+        my $hwnd  = $rec->{hwnd}     or return;
+        my $lv    = $rec->{listview} or return;
+        my $want  = ref $value eq 'ARRAY' ? $value : [ defined $value ? $value : () ];
+        my $clear = pack $LVITEM, 0x0008, 0, 0, 0, 0x0002, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0;    # LVIF_STATE, iItem=0, state=0, stateMask=LVIS_SELECTED
+        my $cbuf  = malloc( length $clear );
         memcpy( $cbuf, $clear, length $clear );
         $suppress_events = 1;
-        SendMessageW( $hwnd, 0x102B, -1, Affix::address($cbuf) );    # LVM_SETITEMSTATE(-1): deselect all
+        SendMessageW( $hwnd, 0x102B, -1, Affix::address($cbuf) );                           # LVM_SETITEMSTATE(-1): deselect all
         free($cbuf);
+
         for my $i ( 0 .. $#{ $lv->{slots} } ) {
             next unless grep { ( $_ // '' ) eq ( $lv->{slots}[$i]{value} // '' ) } @$want;
-            my $sel = pack $LVITEM,
-                0x0008, $i, 0, 0x0002, 0x0002, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0;    # LVIF_STATE, iItem=$i, state=LVIS_SELECTED
+            my $sel  = pack $LVITEM, 0x0008, $i, 0, 0x0002, 0x0002, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0;    # LVIF_STATE, iItem=$i, state=LVIS_SELECTED
             my $sbuf = malloc( length $sel );
             memcpy( $sbuf, $sel, length $sel );
-            SendMessageW( $hwnd, 0x102B, $i, Affix::address($sbuf) );    # LVM_SETITEMSTATE
+            SendMessageW( $hwnd, 0x102B, $i, Affix::address($sbuf) );                                # LVM_SETITEMSTATE
             free($sbuf);
-            SendMessageW( $hwnd, 0x1013, 1, $i );                        # LVM_ENSUREVISIBLE
+            SendMessageW( $hwnd, 0x1013, 1, $i );                                                    # LVM_ENSUREVISIBLE
         }
         $suppress_events = 0;
     }

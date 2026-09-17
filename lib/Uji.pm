@@ -7,6 +7,7 @@ package Uji v0.0.1 {
     use Uji::Node::Checkbox;
     use Uji::Node::Column;
     use Uji::Node::ComboBox;
+    use Uji::Node::DatePicker;
     use Uji::Node::GroupBox;
     use Uji::Node::LinkButton;
     use Uji::Node::ListBox;
@@ -79,5 +80,6 @@ package Uji v0.0.1 {
     sub tree_view      (%args)           { Uji::Node::TreeView->new(%args) }
     sub toolbar        (%args)           { Uji::Node::Toolbar->new(%args) }
     sub menu_bar       (%args)           { Uji::Node::MenuBar->new(%args) }
+    sub date_picker (%args) {Uji::Node::DatePicker->new(%args)}
 };
 1;
