@@ -1,0 +1,97 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::StatusText - a single-line status or banner label
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::status_text(
+        $model->{status},
+        align => 'center',
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::StatusText> is a one-line read-only label, typically used for a status line at the top of a screen or a
+banner above a set of controls. The text is bound to the model: recompose the node with a new C<label> and the
+reconciler calls C<SetWindowTextW> on the existing control. Alignment (left / center / right) is fixed at mount time.
+
+=head1 Constructor
+
+=head2 C<new ( $label, %params )>
+
+You normally use the L<Uji|Uji/status_text> helper, which passes its first argument as C<label>.
+
+=head3 Parameters
+
+=head4 C<label>
+
+The text to display. Default C<''>. Recomposed live.
+
+=head4 C<align>
+
+C<'left'> (default), C<'center'>, or C<'right'>. Fixed at mount time: the matching C<SS_*> style is baked into the
+STATIC control (requires C<recreate_node>; see L<Uji::Reconciler/Recreation>).
+
+=head3 Inherited Parameters
+
+L<Uji::Node::StatusText> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, C<color>, C<background>, C<font>, C<font_size>, and C<id>.
+
+=head1 Methods
+
+=head2 C<label>
+
+Returns the current text.
+
+=head2 C<align>
+
+Returns C<'left'>, C<'center'>, or C<'right'>.
+
+=head2 C<type>
+
+Returns the string C<'status_text'>.
+
+=head1 How it Works
+
+On Win32 this is a C<STATIC> control created with C<WS_CHILD | WS_VISIBLE> and, depending on C<align>, C<SS_CENTER> /
+C<SS_RIGHT> / C<SS_LEFT>. Text updates go through C<SetWindowTextW>.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<status_text>)
+
+=item * L<Uji::Node> - base class and the three-layer property pattern
+
+=item * L<Uji::Driver::Win32> - STATIC plumbing
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+SetWindowTextW SS_CENTER SS_RIGHT SS_LEFT STATIC WS_CHILD WS_VISIBLE recomposed recreate_node
+
+=end stopwords
+
+=cut

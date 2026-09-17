@@ -4,10 +4,7 @@ use Uji::Node;
 class Uji::Node::Window v0.0.1 : isa(Uji::Node) {
     field $title     : param : reader = 'Uji Application';
     field $child     : param : reader = undef;
-    field $min_w     : param : reader = 0;
-    field $min_h     : param : reader = 0;
-    field $max_w     : param : reader = 0;                   # 0 = unconstrained
-    field $max_h     : param : reader = 0;
+    field $menu_bar  : param : reader = undef;               # Uji::Node::MenuBar attached to the window frame
     field $centered  : param : reader = 0;
     field $topmost   : param : reader = 0;
     field $minimized : param : reader = 0;

@@ -1,0 +1,235 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Driver - the platform abstraction layer
+
+=head1 SYNOPSIS
+
+    # Detect a native driver for this platform.
+    my $driver = Uji::Driver::detect();
+
+    # Hand it to the runtime explicitly.
+    Uji::app( ..., driver => $driver )->run;
+
+=head1 DESCRIPTION
+
+L<Uji::Driver> is the base class (and factory) that isolates every native call from the pure-Perl core. It defines the
+small, fixed surface the rest of the toolkit needs - create the window, create children, apply a property, move a
+widget, pump events - so L<Uji::App|Uji::App>, L<Uji::Layout|Uji::Layout>, and L<Uji::Reconciler|Uji::Reconciler> never
+touch the OS directly.
+
+The stub methods here are placeholders; each platform backend implements the real behavior. The toolkit ships one
+backend today, L<Uji::Driver::Win32|Uji::Driver::Win32>, and the test suite runs the whole cycle against a mock driver
+(C<t/lib/MockDriver.pm>) that simply records its calls.
+
+=head1 Class Methods
+
+=head2 C<detect ()>
+
+Returns a new native driver for the current platform:
+
+    Uji::Driver::Win32  if  $^O eq 'MSWin32'
+    dies                otherwise (new backends are TODO)
+
+=head1 Instance Methods
+
+=head2 C<init ( $channel )>
+
+Initializes the backend and stores the message channel. The driver C<put>s user events (as message hashrefs) onto this
+channel.
+
+=head2 C<poll_events ()>
+
+Non-blockingly drains the platform's event queue. Called repeatedly by a L<Uji::App|Uji::App> fiber.
+
+=head2 C<mount ( $vtree )>
+
+Mounts the root C<window> node: creates the native top-level window and registers it. After mounting, the window's true
+client size is measured back into the node's bounds.
+
+=head2 C<mount_children ( $vtree )>
+
+Creates the native child controls for the tree, each placed at the bounds computed by L<Uji::Layout|Uji::Layout>.
+Containers get no native handle.
+
+=head2 C<set_prop ( $node_id, $prop_name, $value )>
+
+Applies a single property change to the native control, e.g. C<< set_prop( $id, 'label', 'Go' ) >>. Supported property
+names are the diffable fields listed under L<Uji::Node|Uji::Node/The Three-Layer Property Pattern>.
+
+=head2 C<move_widget ( $node_id, $x, $y, $w, $h )>
+
+Moves/resizes a mounted control to an absolute box. Skipped for containers (no native handle).
+
+=head2 C<destroy_widget ( $node_id )>
+
+Destroys a control. Present for future reconcile/destroy paths; not yet wired into the reconciler.
+
+=head2 C<update_registry ( $node )>
+
+Refreshes the driver's id-to-node registry entry, keeping the metadata behind a mounted control current across
+re-renders.
+
+=head2 C<sync_window_bounds ( $vtree )>
+
+Reads the window's actual client size and writes it back into the window node's bounds, so layout never assumes the
+requested size was granted.
+
+=head2 C<message_box ( %options )>
+
+Blocks on a native message box and returns the name of the button the user pressed (C<ok>, C<cancel>, C<yes>, C<no>,
+C<abort>, C<retry>, C<ignore>, C<tryagain>, C<continue>) or C<undef> if the call failed. Options:
+
+=over 4
+
+=item * C<title> - dialog caption (default C<Uji>)
+
+=item * C<message> - body text (required)
+
+=item * C<buttons> - C<ok> | C<okcancel> | C<yesno> | C<yesnocancel> | C<abortretryignore> | C<retrycancel> (default C<ok>)
+
+=item * C<icon> - C<error> | C<question> | C<warning> | C<info>
+
+=item * C<default> - default button number (1-3)
+
+=item * C<owner> - owning HWND (defaults to the main window)
+
+=back
+
+=head2 C<file_open_dialog ( %options )>
+
+Blocks on the native Open File dialog. Returns the chosen path as a string (or an arrayref of full paths when C<multi>
+is true) or C<undef> when cancelled. Options:
+
+=over 4
+
+=item * C<title> - dialog caption
+
+=item * C<filter> - either an arrayref of C<< [ label, pattern ] >> pairs (e.g. C<< [ [ 'Text', '*.txt' ], [ 'All', '*.*' ] ] >>)
+or a pipe string (C<< 'Text|*.txt|All|*.*' >>)
+
+=item * C<default_dir> - starting directory
+
+=item * C<default_name> - pre-filled file name
+
+=item * C<multi> - allow multi-select (returns an arrayref of full paths)
+
+=item * C<owner> - owning HWND (defaults to the main window)
+
+=item * C<no_file_must_exist> - omit the OFN_FILEMUSTEXIST flag (e.g. for open-raw use)
+
+=back
+
+=head2 C<file_save_dialog ( %options )>
+
+Blocks on the native Save File dialog and returns the chosen path string or C<undef> when cancelled. Options:
+
+=over 4
+
+=item * C<title>, C<filter>, C<default_dir>, C<default_name>, C<owner> - as in C<file_open_dialog>
+
+=item * C<overwrite_prompt> - append OFN_OVERWRITEPROMPT (default true)
+
+=back
+
+=head2 C<color_picker ( %options )>
+
+Blocks on the native colour picker and returns the chosen colour as C<#RRGGBB> or C<undef> when cancelled. Options:
+
+=over 4
+
+=item * C<title> (unused by the shared shell, reserved)
+
+=item * C<initial> - starting colour from a C<#RRGGBB> string
+
+=item * C<full_open> - expand the full dialog (CC_FULLOPEN)
+
+=item * C<owner> - owning HWND (defaults to the main window)
+
+=back
+
+=head2 C<prompt_dialog ( %options )>
+
+Blocks on a modal text-input dialog and returns the string the user typed, or C<undef> when cancelled. Built as a small
+popup (an EDIT control plus OK/Cancel) with its own private message pump, so it does not disturb the application
+window's class. Options:
+
+=over 4
+
+=item * C<title> - dialog caption (default C<Prompt>)
+
+=item * C<message> - label above the input
+
+=item * C<default> - pre-filled text (also what the mock driver returns when no mock is set)
+
+=item * C<owner> - owning HWND (defaults to the main window)
+
+=back
+
+=head1 Text and Unicode
+
+The toolkit follows L<https://utf8everywhere.org/>: text is characters, not bytes. A driver accepts both forms at its
+boundary and always hands characters to the OS, then returns decoded characters on read:
+
+=over 4
+
+=item * B<Input> - model strings may be flagged character strings (C<use utf8> literals) or bare UTF-8 octets (the
+default for literals in a source without C<use utf8>, and for file/network data). The Win32 backend normalizes both
+with an internal C<_nz> before any C<WString> marshaling: valid UTF-8 octets are decoded, anything else is treated as
+Latin-1 and upgraded. This matters because the FFI layer maps an un-flagged scalar's bytes one-to-one onto UTF-16 code
+units, so raw UTF-8 octets would otherwise surface as mojibake (an ellipsis becoming a broken vertical bar).
+
+=item * B<Output> - every read (window titles, labels, edit values, measured text) is decoded UTF-16 and returned as a
+flagged character string, so C<< $value =~ /\x{2026}/ >> and C<length $value> behave as expected.
+
+=back
+
+The practical rule for applications: put C<use utf8> in your source and store character strings in the model. A driver
+will still do the right thing if handed raw UTF-8 octets, but character strings make C<length>, C<substr>, and regexes
+correct without surprises.
+
+=head1 How it Works
+
+The driver is a B<thin, all-platforms-identical seam>. By fixing both the method set and the property names, the
+toolkit guarantees that L<Uji::Reconciler|Uji::Reconciler> output is backend-agnostic: the same C<patch> results drive
+Win32 controls and the mock driver's call log. Adding a platform means implementing these methods, plus the C<set_prop>
+branches in the reconciler contract (see L<Uji|Uji/Lifecycle of a Property>).
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji::Driver::Win32> - the Windows backend (FFI to user32/gdi32/comctl32)
+
+=item * L<Uji::App> - the runtime that drives these methods
+
+=item * L<Uji::Reconciler> - the consumer of C<set_prop>/C<move_widget>
+
+=item * C<t/lib/MockDriver.pm> - the headless driver used by the test suite
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+set_prop move_widget headless backend hashref mount_children
+
+=end stopwords
+
+=cut

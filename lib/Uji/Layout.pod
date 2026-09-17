@@ -1,0 +1,157 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Layout - the pure-Perl layout engine
+
+=head1 SYNOPSIS
+
+    my $layout = Uji::Layout->new( driver => $driver );
+
+    # Compute bounds for the root node into the available space.
+    $layout->compute( $vtree, 0, 0, 800, 600 );
+
+    # Read the computed geometry off any node after the pass.
+    my ( $x, $y, $w, $h ) = ( $node->bx, $node->by, $node->bw, $node->bh );
+
+=head1 DESCRIPTION
+
+L<Uji::Layout> is a pure-Perl absolute-coordinate layout engine. Widget bounds are computed I<before> any native window
+exists, so behavior is identical across backends and fully testable headless. The driver is consulted only for text
+measurement (intrinsic sizing); everything else is arithmetic.
+
+Layout is a single top-down pass. Each node gets a box (set via L<Uji::Node|Uji::Node/set_bounds>); containers then
+split their available space among children using padding, spacing, and C<flex>.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+=head3 Parameters
+
+=head4 C<driver>
+
+Optional. A L<Uji::Driver>. When the driver provides C<measure_text>, intrinsic sizes use the real native font metrics;
+otherwise text is estimated at 8px per character.
+
+=head1 Methods
+
+=head2 C<compute ( $node, $start_x = 0, $start_y = 0, $avail_w = 800, $avail_h = 600, $main = 'h' )>
+
+Runs a full layout pass for the subtree rooted at C<$node>. C<$main> tells a node which axis the parent
+lays it out along (C<'h'> for a column, C<'w'> for a row) so a flex/fill child knows which axis to grow on.
+
+=over
+
+=item * A C<window> root uses its I<measured> client area: C<bw>/C<bh> if the driver set them, else the available size.
+
+=item * Other nodes size per their fit policy (see the Fit policy section below): an explicit C<w>/C<h> is fixed, C<fit E<gt> 'content'>
+shrinks to the measured intrinsic size, and a flex/fill child takes the cell (a flex share arrives as the available
+main size). Every computed extent is clamped against the node's C<min_w>/C<min_h>/C<max_w>/C<max_h>.
+
+=item * Containers without an explicit size fill their parent's available space.
+
+=item * After placing a container, children are laid out along its main axis by L</_layout_flex>.
+
+=back
+
+=head2 C<fit policy>
+
+The size of each node comes from three sources, in order: an explicit numeric C<w>/C<h> (C<fixed>), the
+parent's I<cell> (via C<flex>, a structural container, or C<fit E<gt> 'fill'>), or the natural I<content> size
+(via C<fit E<gt> 'content'> or the leaf default). C<min>/C<max> constraints clamp the result on each axis and a
+container's natural size honours its children's constraints, so constraints plumb both down and up the tree.
+The cross axis defaults to filling the cell for width and hugging content for height; that asymmetry is
+exactly what C<fit_w>/C<fit_h> override. See L<Uji::Node/fit>, C<fit_w>, C<fit_h> and the min/max params.
+
+=head2 C<cross-axis alignment>
+
+When a node is smaller than its cell on the cross axis, C<align_w>/C<align_h> (C<'start'>, C<'center'>, C<'end'>,
+C<'stretch'>) place it within the freed space. The container resolves the node's cross size with
+L</_cross_size> (the same rule C<compute> will apply) and offsets the origin by a fraction of the free space
+I<before> recursing, so the whole subtree's absolute coordinates shift with it. See L<Uji::Node/align_w>, C<align_h>.
+
+=head2 C<_layout_flex ( $container, $dir, $x, $y, $w, $h )>
+
+The flex pass for a column/row/radio-group. Space distribution:
+
+=over
+
+=item 1. Padding shrinks the inner box; spacing divides the main axis.
+
+=item 2. Children with C<flex =E<gt> 0> take a proportional share of the leftover main space.
+
+=item 3. Explicit main sizes and natural (content) sizes are budgeted next; fill children (C<fit E<gt> 'fill'> or
+structural containers with no explicit main size) split whatever remains.
+
+=item 4. Each child is laid out recursively at its resulting box.
+
+=back
+
+Children are stretched across the cross axis by default; a C<'content'> fit policy shrinks them and
+C<align_w>/C<align_h> then position them inside the cell (see L</cross-axis alignment>).
+
+=head2 C<_cross_size ( $node, $axis, $cell )>
+
+The cross extent C<compute> will give C<$node> inside a flowing container -- an explicit size (clamped), the
+natural size under C<fit =E<gt> 'content'>, or the full cell otherwise. Used to offset the sub-layout origin for
+alignment so descendants move together.
+
+=head2 C<_intrinsic ( $node )>
+
+Measures the natural content size C<< ( $w, $h ) >> of a leaf, using the driver's C<measure_text> when available:
+
+    text / button          text width; button padded ( +24 w, +10 h )
+    checkbox / radio       text width + box ( +24 w, +4 h )
+    text_input / password  max(value width, 80) x 20
+    multiline_text         fixed minimum 120 x 48 (a text area bigger than a single line)
+    slider                 120 x 26 (vertical sliders swap to 26 x 120)
+    containers             sum of children + padding + spacing
+
+=head2 C<_natural ( $node )>
+
+The I<effective> content box: intrinsic sizes from L</_intrinsic>, overridden by an explicit C<w>/C<h>, then
+clamped against C<min_w>/C<min_h>/C<max_w>/C<max_h>. Containers budget fixed children (and measure their own
+natural size) from C<_natural>, so constraints plumb up and down the tree.
+
+=head1 How it Works
+
+The engine never reads back "requested" geometry mid-pass. Each call to C<compute> writes fresh values via
+L<Uji::Node|Uji::Node/set_bounds>, so a later re-layout (e.g. on C<WM_SIZE>) starts from a clean slate. Because the
+numbers live on the nodes themselves, the reconciler can diff old vs new bounds without keeping any layout state.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji::Node> - where computed bounds land (C<bx>/C<by>/C<bw>/C<bh>)
+
+=item * L<Uji::App> - calls C<compute> on mount and after every render batch
+
+=item * L<Uji::Driver> - provides C<measure_text> for intrinsic sizing
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+intrinsic flex pass headless testable cross axis coord multiline_text
+
+=end stopwords
+
+=cut

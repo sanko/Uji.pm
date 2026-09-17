@@ -1,0 +1,140 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::ComboBox - a dropdown selection
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::combo_box(
+        value     => $model->{color},
+        options   => [
+            { value => 'red',   label => 'Red' },
+            { value => 'green', label => 'Green' },
+            { value => 'blue',  label => 'Blue' }
+        ],
+        on_select => sub ($v) { { type => 'SET_COLOR', value => $v } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::ComboBox> is a dropdown selection stored as a single scalar in the model. On Win32 it is a native
+C<COMBOBOX>. By default it is a read-only dropdown list (C<CBS_DROPDOWNLIST>); set C<editable> to let the user type
+free text instead (C<CBS_DROPDOWN>).
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/combo_box> helper.
+
+=head3 Parameters
+
+=head4 C<value>
+
+The currently selected option's C<value>. Default C<''>. Recomposed live by the reconciler.
+
+=head4 C<options>
+
+Array reference of C<< { value => ..., label => ... } >> hashrefs. The C<label> defaults to the C<value>. When the
+options change, the reconciler rebuilds the dropdown's item strings.
+
+=head4 C<editable>
+
+When true, the box is an editable dropdown: the user can type free text or pick a listed option. Default C<0>.
+
+=head4 C<on_select>
+
+A callback receiving the selected option's C<value>. For an editable box that was typed instead of picked, it receives
+the typed text:
+
+    on_select => sub ($v) { { type => 'SET_COLOR', value => $v } }
+
+Return a message hashref (or C<undef> to ignore the event).
+
+=head4 C<on_input>
+
+For editable boxes only: a callback receiving the current text on every edit (the C<CBN_EDITCHANGE> path). Return a
+message hashref (or C<undef> to ignore the event).
+
+=head3 Inherited Parameters
+
+L<Uji::Node::ComboBox> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, and C<id>.
+
+=head1 Methods
+
+=head2 C<value>
+
+Returns the selected option's C<value>.
+
+=head2 C<options>
+
+Returns the array reference of C<< { value => ..., label => ... } >> options.
+
+=head2 C<editable>
+
+Returns C<1> when the user may type free text, C<0> otherwise.
+
+=head2 C<on_select>
+
+Returns the selection callback (or C<undef>).
+
+=head2 C<on_input>
+
+Returns the edit callback (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'combo_box'>.
+
+=head1 How it Works
+
+On Win32 the box is a native C<COMBOBOX> control created with C<CBS_DROPDOWNLIST> (C<0x3>, non-editable) or
+C<CBS_DROPDOWN> (C<0x2>, editable). The layout height becomes field height plus dropped-list extent, so the dropdown
+actually shows its rows. Items are added as UTF-16 via C<CB_ADDSTRING>; selecting fires C<CBN_SELCHANGE> (C<1>) whose
+index is translated back to the option's C<value> through C<CB_GETCURSEL>. Typing in an editable box fires
+C<CBN_EDITCHANGE> (C<5>).
+
+The I<len> used by L<Uji::Layout|Uji::Layout/DESCRIPTION> is the value stored in the model, never a handle-mutating
+call.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<combo_box>)
+
+=item * L<Uji::Node::ListBox> - the visible-list sibling
+
+=item * L<Uji::Node::RadioGroup> - exclusive choice without a dropdown
+
+=item * L<Uji::Node> - base class and common parameters
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+CBS_DROPDOWNLIST CBS_DROPDOWN CBN_SELCHANGE CBN_EDITCHANGE CB_ADDSTRING CB_GETCURSEL dropdown editable hashref hwnd
+
+=end stopwords
+
+=cut

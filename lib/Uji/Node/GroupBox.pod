@@ -1,0 +1,118 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::GroupBox - an etched frame with a title band around a set of controls
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::group_box(
+        label    => 'Sound settings',
+        padding  => 10,
+        spacing  => 8,
+        children => [
+            Uji::checkbox( label => 'Loud mode', checked => $model->{loud}, on_toggle => ... ),
+            Uji::button(  label => 'Shout',      on_click => ... ),
+        ],
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::GroupBox> draws a titled etched frame and lays out its children inside the title-relative inner rect. It
+is a plain layout container with visual grouping only: its children compose exactly like a column (they are positioned
+by L<Uji::Layout> inside the inner rect, with C<padding> around the inside and C<spacing> between them).
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/group_box> helper.
+
+=head3 Parameters
+
+=head4 C<label>
+
+The title shown in the frame's top band. Default C<''>. Recomposed live.
+
+=head4 C<children>
+
+An arrayref of child nodes. Recomposed live (children are added, moved, removed, and re-parented the same way as
+column/row children).
+
+=head4 C<padding>
+
+The inset (px) between the inner rect and the first/last child. Default C<8>. Recomposed live.
+
+=head4 C<spacing>
+
+The gap (px) between consecutive children. Default C<6>. Recomposed live.
+
+=head3 Inherited Parameters
+
+L<Uji::Node::GroupBox> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, C<color>, C<background>, C<font>, C<font_size>, and C<id>.
+
+=head1 Methods
+
+=head2 C<label>
+
+Returns the title.
+
+=head2 C<children>
+
+Returns the child nodes.
+
+=head2 C<padding>, C<spacing>
+
+Return the current layout insets.
+
+=head2 C<type>
+
+Returns the string C<'group_box'>.
+
+=head1 How it Works
+
+On Win32 a group box is a C<BUTTON> control with the C<BS_GROUPBOX> style, giving the etched frame and title. Win32
+group boxes cannot usefully parent child controls: the C<BS_GROUPBOX> window procedure swallows C<WM_COMMAND>/notify
+messages from grandchildren (a button inside would route nowhere). The driver therefore mounts the children as SIBLINGS
+of the app window and positions them in the title-relative inner rect (the group box's top edge plus the title height).
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<group_box>)
+
+=item * L<Uji::Layout> - inner-rect layout for group_box children
+
+=item * L<Uji::Node> - base class and the three-layer property pattern
+
+=item * L<Uji::Driver::Win32> - BS_GROUPBOX plumbing
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+BS_GROUPBOX BUTTON WM_COMMAND recomposed
+
+=end stopwords
+
+=cut

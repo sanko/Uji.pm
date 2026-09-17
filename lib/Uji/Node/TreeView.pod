@@ -1,0 +1,141 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::TreeView - a hierarchical tree selection
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::tree_view(
+        value    => 'b1',
+        nodes    => [
+            { value => 'a', label => 'Alpha', children => [
+                { value => 'a1', label => 'A-one' },
+                { value => 'a2', label => 'A-two' },
+            ]},
+            { value => 'b', label => 'Bravo', children => [
+                { value => 'b1', label => 'B-one' },
+                { value => 'b2', label => 'B-two' },
+                { value => 'b3', label => 'B-three' },
+            ]},
+        ],
+        expanded => ['a'],
+        on_select => sub ($v) { { type => 'SET_BRANCH', value => $v } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::TreeView> is a hierarchical tree stored as nested hashrefs in the model. On Win32 it is a native
+C<SysTreeView32> with expand/collapse buttons and optional connector lines.
+
+Each node in the C<nodes> array is C<< { value => ..., label => ..., children => [...] } >>. The C<label> defaults to
+the C<value>. Nodes may nest arbitrarily deep. The C<value> of the currently selected item is held in the model scalar.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/tree_view> helper.
+
+=head3 Parameters
+
+=head4 C<value>
+
+The currently selected item's C<value>. Default C<undef>. Recomposed live by the reconciler.
+
+=head4 C<nodes>
+
+Array reference of C<< { value => ..., label => ..., children => [...] } >> hashrefs. C<children> is optional (leaf
+nodes). When the nodes change, the reconciler rebuilds the tree items.
+
+=head4 C<expanded>
+
+Array reference of C<value> strings listing which items should be expanded (showing their children). Items not listed
+remain collapsed. Default C<[]>.
+
+=head4 C<on_select>
+
+A callback receiving the selected item's C<value>:
+
+    on_select => sub ($v) { { type => 'SET_BRANCH', value => $v } }
+
+Return a message hashref (or C<undef> to ignore the event).
+
+=head3 Inherited Parameters
+
+L<Uji::Node::TreeView> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, and C<id>.
+
+=head1 Methods
+
+=head2 C<value>
+
+Returns the selected item's C<value>.
+
+=head2 C<nodes>
+
+Returns the array reference of nested hashref nodes.
+
+=head2 C<expanded>
+
+Returns the array reference of expanded item values.
+
+=head2 C<on_select>
+
+Returns the selection callback (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'tree_view'>.
+
+=head1 How it Works
+
+On Win32 the tree is a native C<SysTreeView32> control created with C<TVS_HASBUTTONS | TVS_LINESATROOT | TVS_HASLINES |
+TVS_DISABLEDRAGDROP | TVS_SHOWSELALWAYS>. Items are inserted recursively as UTF-16 via C<TVM_INSERTITEMW>; the
+insert-time lParam stores a slot index mapping back to the model value. C<TVM_EXPAND> applies the C<expanded> state
+after children are added. Selection fires C<TVN_SELCHANGED> (C<WM_NOTIFY>) whose itemNew lParam is resolved through the
+slot table back to the model value.
+
+The reconciler diffs C<nodes> and C<expanded> independently: changing C<value> alone is a cheap C<TVM_SELECTITEM>;
+changing C<nodes> rebuilds the entire item tree.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<tree_view>)
+
+=item * L<Uji::Node::ComboBox> - flat dropdown selection
+
+=item * L<Uji::Node::ListBox> - flat scrollable list
+
+=item * L<Uji::Node> - base class and common parameters
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+TVS_HASBUTTONS TVS_LINESATROOT TVS_HASLINES TVS_DISABLEDRAGDROP TVS_SHOWSELALWAYS TVM_INSERTITEMW TVM_EXPAND
+TVN_SELCHANGED SysTreeView32 hashref hwnd lParam
+
+=end stopwords
+
+=cut

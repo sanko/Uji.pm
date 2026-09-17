@@ -1,0 +1,116 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::ToggleSwitch - a two-position settings switch
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::toggle_switch(
+        label     => 'Dark mode',
+        checked   => $model->{dark},
+        on_toggle => sub ($on) { { type => 'TOGGLE_DARK', value => $on } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::ToggleSwitch> is a two-state control for on/off settings: a labelled slide-able switch that flips between
+checked and unchecked. The state is the boolean C<checked>.
+
+It shares its model contract - a C<checked> boolean plus an C<on_toggle> callback - with
+L<Uji::Node::ToggleButton|Uji::Node::ToggleButton>. The switch is the wider, more explicit affordance; use it in
+settings rows and prefer the toggle button where an inline button is a better fit.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/toggle_switch> helper.
+
+=head3 Parameters
+
+=head4 C<label>
+
+The text next to the switch. Default C<''>.
+
+=head4 C<checked>
+
+The boolean state. Default C<0>. Recomposed live through C<set_prop('checked')>.
+
+=head4 C<on_toggle>
+
+A callback receiving the new boolean:
+
+    on_toggle => sub ($on) { { type => 'TOGGLE_DARK', value => $on } }
+
+The argument is C<1> when the switch is on and C<0> when off. Return a message hashref (or C<undef> to ignore the event).
+
+=head3 Inherited Parameters
+
+L<Uji::Node::ToggleSwitch> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, and C<id>.
+
+=head1 Methods
+
+=head2 C<label>
+
+Returns the label text.
+
+=head2 C<checked>
+
+Returns the boolean state (C<1> or C<0>).
+
+=head2 C<on_toggle>
+
+Returns the toggle callback (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'toggle_switch'>.
+
+=head1 How it Works
+
+On Win32 a toggle switch is a child C<BUTTON> control created with C<BS_AUTOCHECKBOX | BS_PUSHLIKE> - the same
+combination as L<Uji::Node::ToggleButton|Uji::Node::ToggleButton>, so the two widgets are functionally the same native
+control differing only in layout/sizing. Clicks post C<BN_CLICKED> (C<WM_COMMAND>); the driver reads the fresh state
+with C<BM_GETCHECK> and calls L</on_toggle>. Mount and C<set_prop('checked')> apply the model state with C<BM_SETCHECK>.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - the toolkit entry point (exports C<toggle_switch>)
+
+=item * L<Uji::Node::ToggleButton> - the same contract, button appearance
+
+=item * L<Uji::Node::Checkbox> - the classic two-state control
+
+=item * L<Uji::Node> - the base node class and shared parameters
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+BS_AUTOCHECKBOX BS_PUSHLIKE BM_SETCHECK BM_GETCHECK BN_CLICKED hashref
+
+=end stopwords
+
+=cut

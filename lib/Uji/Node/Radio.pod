@@ -1,0 +1,133 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Radio - a single option button
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    # You rarely build radios directly; RadioGroup builds them for you.
+    Uji::Node::Radio->new(
+        value     => 'red',
+        label     => 'Red',
+        first     => 1,
+        selected  => 1,
+        on_select => sub ($v) { { type => 'SET_COLOR', value => $v } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::Radio> is a single option button inside an exclusive group. It is normally created I<for you> by
+L<Uji::Node::RadioGroup|Uji::Node::RadioGroup> - see that module for the idiomatic C<Uji::radio_group(...)> usage.
+Individual radios never appear in a model: the group's single scalar C<value> is the source of truth.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+=head3 Parameters
+
+=head4 C<value>
+
+The option's payload string - what the group reports (and your C<on_select> callback receives) when this option is
+chosen. Default C<''>.
+
+=head4 C<label>
+
+The text shown next to the circle. Defaults to C<value> when built by a group and omitted.
+
+=head4 C<first>
+
+C<1> if this is the first radio in its group. On Win32 the first button carries C<WS_GROUP>, which anchors the
+exclusive group. Default C<0>.
+
+=head4 C<selected>
+
+C<1> if this option is currently chosen. Default C<0>. Recomposed live by the group's C<value>.
+
+=head4 C<on_select>
+
+The group's callback, shared by every radio. Receives the C<value> of the clicked option:
+
+    on_select => sub ($value) { { type => 'SET_COLOR', value => $value } }
+
+Return a message hashref (or C<undef>).
+
+=head3 Inherited Parameters
+
+Inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>, C<visible>, C<tooltip>,
+C<x>/C<y>/C<w>/C<h>, and C<id>.
+
+=head1 Methods
+
+=head2 C<value>
+
+Returns this option's payload string.
+
+=head2 C<label>
+
+Returns the display text.
+
+=head2 C<first>
+
+Returns C<1> when this radio anchors its group.
+
+=head2 C<selected>
+
+Returns C<1> when currently chosen.
+
+=head2 C<on_select>
+
+Returns the callback (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'radio'>.
+
+=head1 How it Works
+
+On Win32 a radio is a C<BUTTON> control created with C<BS_AUTORADIOBUTTON> (C<0x9>, the auto variety that checks the
+clicked button and clears the group; the manual C<BS_RADIOBUTTON>, C<0x4>, never does). The first radio of a group adds
+C<WS_GROUP>, which is what makes Win32 treat them as one exclusive set. Check state is applied at mount and routed from
+the L<group's value|Uji::Node::RadioGroup> on every render.
+
+Radios keep stable native handles across re-renders because the group memoizes child ids per instance (see
+L<Uji::Node::RadioGroup|Uji::Node::RadioGroup>).
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji::Node::RadioGroup> - the container that builds and drives radios
+
+=item * L<Uji::Node::Checkbox> - the non-exclusive toggle
+
+=item * L<Uji> - entry point (exports C<radio_group>)
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+BS_AUTORADIOBUTTON BS_RADIOBUTTON WS_GROUP BM_SETCHECK hashref recomposed memoizes
+
+=end stopwords
+
+=cut

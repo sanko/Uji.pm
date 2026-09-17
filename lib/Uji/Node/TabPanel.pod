@@ -1,0 +1,133 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::TabPanel - a tabbed set of switchable sub-views
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::tab_panel(
+        panels => [
+            { title => 'Editor',  child => Uji::multiline_text( value => $model->{body}, ... ) },
+            { title => 'Preview', child => Uji::scroll_view( Uji::text($model->{html}) ) },
+            { title => 'Files' },
+        ],
+        index     => $model->{tab},
+        on_select => sub ($i) { { type => 'SET_TAB', value => $i } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::TabPanel> stacks several panels - each C<< { title => '...', child => ... } >> - behind a native tab
+strip. Only the active panel's subtree is visible; clicking a tab switches which panel shows and fires C<on_select>
+with the new index. A panel without a C<child> renders as an empty page, which is handy for a lazily-filled tab.
+
+The active panel is the C<index> (0-based) in the model. It is recomposed live: changing C<index> flips the visible
+subtree without rebuilding the tabs, while changing C<panels> rebuilds the strip (see L</How it Works>).
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/tab_panel> helper.
+
+=head3 Parameters
+
+=head4 C<panels>
+
+Array reference of panel descriptors, either C<< { title => '...', child => ... } >> hashrefs or C<< [ $title, $child ]
+>> arrayrefs. The C<child> may be omitted or C<undef> for an empty panel. Default C<[]>.
+
+=head4 C<index>
+
+The selected panel index (0-based). Default C<0>. Recomposed live.
+
+=head4 C<on_select>
+
+A callback receiving the newly selected index:
+
+    on_select => sub ($i) { { type => 'SET_TAB', value => $i } }
+
+Return a message hashref (or C<undef> to ignore the event).
+
+=head3 Inherited Parameters
+
+L<Uji::Node::TabPanel> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, and C<id>. A tab_panel with no main size is a FILL child and takes the
+leftover space of its container.
+
+=head1 Methods
+
+=head2 C<panels>
+
+Returns the array reference of panel descriptors.
+
+=head2 C<index>
+
+Returns the selected panel index.
+
+=head2 C<on_select>
+
+Returns the selection callback (or C<undef>).
+
+=head2 C<children>
+
+Returns the arrayref of the panel C<child> subtrees (omitting empty panels). Used by the reconciler and layout to walk
+the virtual tree.
+
+=head2 C<type>
+
+Returns the string C<'tab_panel'>.
+
+=head1 How it Works
+
+A tab_view on Win32 is a native C<SysTabControl32> (the strip only) mounted at the node's box, plus every panel's
+C<child> subtree mounted as a sibling of the app window and laid out into the same body rect - the strip's C<25> px
+estimated height at the top, a couple of px of breathing room, then the content area. Only the active panel's subtree
+is shown (each inactive panel hides its whole content stack, including auxiliary children like a spin box's buddy or a
+scroll_view's scrollbars). Mount pushes the tab strip below the content children - comctl32 raises the tab on
+C<TCM_SETCURSEL> / repaint, so the push must precede the selection message - selects the initial tab, and applies the
+visibility. Tab clicks arrive as C<TCN_SELCHANGE> (C<WM_NOTIFY>, code -551); the driver reads the live index with
+C<TCM_GETCURSEL>, flips the visible panel, and fires C<on_select>. C<TCN_SELCHANGING> is ignored; only the change
+matters. C<set_prop('index')> switches tabs programmatically without notifying the model, and C<set_prop('panels')>
+rebuilds the strip and re-applies the selection.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - the toolkit entry point (exports C<tab_panel>)
+
+=item * L<Uji::Node::SplitView> - two resizable panes instead of tabs
+
+=item * L<Uji::Node::GroupBox> - a titled box for related controls
+
+=item * L<Uji::Node> - the base node class and shared parameters
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+SysTabControl32 TCM_SETCURSEL TCM_GETCURSEL TCN_SELCHANGE TCN_SELCHANGING WM_NOTIFY hashref recomposed
+
+=end stopwords
+
+=cut

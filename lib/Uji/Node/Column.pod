@@ -1,0 +1,118 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Column - a vertical flex container
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::column(
+        padding  => 15,
+        spacing  => 12,
+        children => [
+            Uji::text( 'Count: ' . $model->{count} ),
+            Uji::row( ... )
+        ]
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::Column> stacks its children top-to-bottom. It is a pure layout container: it produces no native control
+and carries no model state. The pure-Perl layout engine (L<Uji::Layout|Uji::Layout>) decides the exact bounds - see
+below for how flex and spacing distribute the vertical space.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/column> helper.
+
+=head3 Parameters
+
+=head4 C<children>
+
+Array reference of child nodes, laid out top-to-bottom. Default C<[]>.
+
+=head4 C<padding>
+
+Space between the column's edge and its children. Default C<10>.
+
+=head4 C<spacing>
+
+Gap between consecutive children. Default C<10>.
+
+=head3 Inherited Parameters
+
+Inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>, including C<flex> (a column itself can flex
+inside its parent), C<visible>, C<id>, C<x>/C<y>/C<w>/C<h>.
+
+=head1 Methods
+
+=head2 C<children>
+
+Returns the child array reference.
+
+=head2 C<padding>, C<spacing>
+
+Return the container parameters.
+
+=head2 C<type>
+
+Returns the string C<'column'>.
+
+=head1 How it Works
+
+A column is laid out by L<Uji::Layout|Uji::Layout/_layout_flex> along the vertical axis:
+
+=over
+
+=item 1. Padding is removed from the edges, spacing from the interior.
+
+=item 2. Children with C<flex =E<gt> 0> take their natural/requested height.
+
+=item 3. Remaining free space is split proportionally among children with C<flex E<gt> 0>.
+
+=item 4. Every child is stretched to the full inner width.
+
+=back
+
+The container itself has no native handle; its children are created as siblings of it by the L<Win32
+driver|Uji::Driver::Win32/mount_children>.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji::Node::Row> - the horizontal twin
+
+=item * L<Uji::Layout> - the engine that computes these bounds
+
+=item * L<Uji> - entry point (exports C<column>)
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+flex padding spacing hashref recomposed
+
+=end stopwords
+
+=cut

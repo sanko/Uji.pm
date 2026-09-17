@@ -1,0 +1,261 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Driver::Win32 - the Windows backend (FFI to user32/gdi32/comctl32)
+
+=head1 SYNOPSIS
+
+    my $driver = Uji::Driver::detect();    # Uji::Driver::Win32 on MSWin32
+
+    Uji::app(
+        init   => \&init,
+        update => \&update,
+        view   => \&view,
+        driver => $driver
+    )->run;
+
+=head1 DESCRIPTION
+
+L<Uji::Driver::Win32> implements L<Uji::Driver|Uji::Driver> on Windows using FFI (L<Affix>) straight into
+C<user32.dll>, C<gdi32.dll>, and C<comctl32.dll>. No XS, no CPAN module wrapping the Win32 API: the driver creates a
+window class, pumps messages, mounts controls (BUTTON, STATIC, EDIT, TRACKBAR), routes C<WM_COMMAND>/C<WM_HSCROLL>
+notifications, and applies reconciler updates - all through raw Win32 calls.
+
+=head1 Constructor
+
+=head2 C<new ()>
+
+No parameters. The class is constructed by C<Uji::Driver::detect()>. Internally the constructor registers the FFI
+affixes and calls C<InitCommonControlsEx> so common controls (trackbars) are available.
+
+=head1 Methods
+
+=head2 C<init ( $channel )>
+
+Registers the C<'UjiWindowClass'> window class and its window procedure, and stores the message channel the C<on_*>
+handlers write to.
+
+=head2 C<mount ( $vtree )>
+
+Creates the top-level window with C<CreateWindowExW>. Style is C<WS_OVERLAPPEDWINDOW> minus C<WS_THICKFRAME> when the
+window is C<resizable =E<gt> 0>. Honor C<centered>, C<topmost>, C<minimized>/C<maximized>, then measures the real
+client size back into the window node's bounds.
+
+=head2 C<mount_children ( $vtree )>
+
+Recursively creates child controls for the tree (see L<Uji::Node|Uji::Node> types): BUTTON
+(text/button/checkbox/radio), STATIC, EDIT (text/multi-line/password, with C<ES_PASSWORD> or the multi-line style
+bits), and C<msctls_trackbar32> sliders. Every control is created at its computed absolute bounds; initial state
+(enabled, visible, tooltip, checked, slider range) is applied immediately. Containers get no native handle, but a
+C<radio_group> gets a registry entry so C<set_prop('value')> can route check state to its radio children.
+
+=head2 C<poll_events ()>
+
+A non-blocking drain of the message queue via C<PeekMessageW>, C<TranslateMessage>, C<DispatchMessageW>. Blocking
+messages are filtered out so the fiber can yield.
+
+=head2 C<set_prop ( $node_id, $prop_name, $value )>
+
+See L<Uji::Driver|Uji::Driver/set_prop>. Implemented property branches and their native calls:
+
+=over
+
+=item * C<title> - C<SetWindowTextW> on the main window.
+
+=item * C<topmost> - C<SetWindowPos> with C<HWND_TOPMOST>/C<HWND_NOTOPMOST>.
+
+=item * C<minimized> / C<maximized> - C<ShowWindow> C<SW_MINIMIZE>/C<SW_MAXIMIZE>/C<SW_RESTORE>.
+
+=item * C<min_w>/C<min_h>/C<max_w>/C<max_h> - re-clamps the live window size via C<WM_GETMINMAXINFO>-style math.
+
+=item * C<label> - C<SetWindowTextW> + C<InvalidateRect>.
+
+=item * C<value> - slider via C<TBM_SETPOS>; spin box via C<UDM_SETPOS32> (the edit text follows, since
+the driver owns it); progress bar via C<PBM_SETPOS>; radios via C<BM_SETCHECK> routed from the group's C<value>; edits via
+C<SetWindowTextW> (skipped when the native text already matches, so the caret never jumps).
+
+=item * C<enabled> - C<EnableWindow>.  C<visible> - C<ShowWindow> (C<SW_SHOW>/C<SW_HIDE>).
+The spin box's up/down buddy follows both.
+
+=item * C<focused> - C<SetFocus> when true.
+
+=item * C<tooltip> - attaches/replaces a tooltip via a shared C<TOOLTIPS_CLASS32> control.
+
+=item * C<readonly> - C<EM_SETREADONLY>.  C<maxlength> - C<EM_LIMITTEXT>.
+
+=item * C<step> - C<TBM_SETLINESIZE>/C<TBM_SETPAGESIZE>; spin box via C<UDM_SETACCEL>.  C<checked> -
+C<BM_SETCHECK> (checkboxes and both toggle widgets).
+
+=item * C<min>/C<max> - C<TBM_SETRANGE>, C<PBM_SETRANGE32>, or C<UDM_SETRANGE32> per control type.
+
+=item * C<placeholder> - C<EM_SETCUEBANNER> (text inputs, multi-line, password).
+
+=item * C<password_char> - C<EM_SETPASSWORDCHAR> + repaint (password).
+
+=item * C<color> / C<background> - cached on the registry record; the OS asks for them on the next paint via the
+C<WM_CTLCOLOR*> notifications (below). A C<InvalidateRect> forces the repaint immediately.
+
+=item * C<font> / C<font_size> - builds (or reuses) a matching font via C<CreateFontIndirectW> + C<WM_SETFONT>, cached on
+the registry record.
+
+=back
+
+=head2 C<recreate_node ( $node_id, $vnode )>
+
+Destroys the native control behind C<$node_id> and recreates it from scratch with C<$vnode>'s current properties. Used
+when a mount-only property changed - C<multiline> (edits), C<orientation> (sliders), C<align> (text) - because those
+are baked into the window style at creation time and cannot be changed in place. The tree's C<id> is preserved so the
+registry and every event binding keep working; style-affecting parameters (label, color, background, font) are
+re-applied immediately after recreation.
+
+=head2 C<move_widget ( $node_id, $x, $y, $w, $h )>
+
+C<SetWindowPos> to an absolute box; skipped for container nodes (no native handle).
+
+=head2 C<measure_text ( $text )>
+
+Measures a string with the standard GUI font (C<GetTextExtentPoint32W>) so layout intrinsic sizes match the real
+controls.
+
+=head2 C<sync_window_bounds ( $vtree )>
+
+Reads the window's client size via C<GetClientRect> and writes it back to the window node's bounds.
+
+=head1 How it Works
+
+=head3 The Window Procedure
+
+C<init> installs a single window procedure that translates native notifications into the toolkit's message channel:
+
+=over
+
+=item C<WM_COMMAND> (C<0x0111>) - the big one. C<BN_CLICKED> notifications route to C<on_click> (button):
+a static hashref is sent verbatim, a callback is invoked and its return value sent. For checkboxes the
+current check state is read back with C<BM_GETCHECK> before calling C<on_toggle>. Radio clicks dispatch
+C<on_select> with the clicked option's value. C<EN_CHANGE> calls C<on_input> with the control's current
+text. C<CBN_EDITCHANGE> does the same for editable combo boxes, and C<CBN_SELCHANGE>/C<LBN_SELCHANGE>
+call C<on_select> with the picked option's value - or, for a multi-select list (C<multiple>), with an
+arrayref of the selected option values. Two C<BN_CLICKED> special cases are routed through command-id
+tables instead of the control registry: toolbar buttons (C<toolbar_cmds>, ids 0x4000+) and menu-bar
+items (C<menu_cmds>, same allocator) both dispatch C<on_click> with the item's C<id>.
+
+=item C<WM_HSCROLL> (C<0x0114>) - slider drags read C<TBM_GETPOS> and call C<on_change>.
+
+=item C<WM_VSCROLL> (C<0x0115>) - two cases. A vertical slider reports its own handle as C<lParam>: the registry lookup
+succeeds, the position is read with C<TBM_GETPOS>, and C<on_change> fires. A spin box's C<msctls_updown32> buddy is
+instead reachable as the C<aux> entry of its registry record; its position is read with C<UDM_GETPOS32>, the edit text
+is re-synced by the driver, and C<on_change> fires with the new value.
+
+=item C<WM_CTLCOLORSTATIC> (C<0x0138>), C<WM_CTLCOLOREDIT> (C<0x0133>), C<WM_CTLCOLORBTN> (C<0x0135>) - the control's
+C<lParam> resolves through the registry; when a C<color>/C<background> is set, the driver calls C<SetTextColor>
+(C<color>) and/or C<SetBkColor> + selects a cached brush (C<background>) onto the C<wParam> DC. Never passes through
+C<DefWindowProcW>, which would reset the DC colours the OS already chose; instead it returns a system brush
+(C<COLOR_WINDOW> for edits, C<COLOR_BTNFACE> for statics/buttons) as the default. Note the DC state is restored by
+Windows after the notification, so the colours only show up on the real paint, not on a direct
+C<SendMessageW>+C<GetTextColor> read-back.
+
+=item C<WM_SIZE> - puts a reserved C<RESIZE> message and triggers a synchronous re-layout (so live resizing never
+shows stale layout).
+
+=item C<WM_GETMINMAXINFO> - clamps the track size to C<min_w>/C<min_h>/C<max_w>/C<max_h>.
+
+=item C<WM_DESTROY> - puts C<< { type => 'QUIT' } >> so the process exits with the window.
+
+=back
+
+All produced messages are plain hashrefs C<put> onto the channel for L<Uji::App|Uji::App/How it Works> to fold through
+C<update>.
+
+=head3 The Registry
+
+Every mounted control - and the window itself - is recorded in an id-keyed registry mapping C<id E<rarr> { hwnd, node
+}>. C<WM_GETMINMAXINFO>, C<WM_HSCROLL>, C<WM_VSCROLL>, the C<WM_CTLCOLOR*> notifications, and C<set_prop> all resolve
+the native handle the same way the reconciler indexes nodes: by id. Containers and C<radio_group> carry C<hwnd =>
+undef> entries (the group only routes state to its radio children). The spin box's up/down buddy is reachable as the
+C<aux> entry of its registry record; the current C<color>/C<background>/C<font>/C<font_size> caches and the readonly
+flag are also kept per record so a recreation or repaint can re-apply them.
+
+=head3 Win32 Control Mapping
+
+=over
+
+=item C<text_input> / C<multiline_text> / C<password> - a C<STATIC>/C<EDIT> family. Text inputs are single-line
+C<EDIT> controls (C<WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL>). With C<multiline> set the style becomes
+C<WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | WS_TABSTOP | ES_MULTILINE | ES_AUTOVSCROLL>; the
+L<Uji::Node::MultilineText|Uji::Node::MultilineText> subclass is created with exactly that style and never changes it.
+Password fields add C<ES_PASSWORD>. C<WS_TABSTOP> on multi-line lets Tab move focus instead of inserting a tab;
+C<ES_AUTOVSCROLL> keeps the caret visible as the text grows. C<placeholder> paints grey hint text with the driver's
+paint handler while the native text is empty; C<password_char> maps to C<EM_SETPASSWORDCHAR>.
+
+=item C<spin_box> - a read-only C<EDIT> and its C<msctls_updown32> buddy placed SIDE BY SIDE (edit
+width = C<bw - SM_CXVSCROLL>, buddy owns the right strip), the classic Win32 spin layout. An earlier
+overlay scheme put the edit under the buddy in the parent's z-order, so the edit swallowed arrow
+clicks (value never changed, caret sat "in front" on Windows). The driver owns the edit text, because
+the classic C<UDS_SETBUDDYINT> lazy C<WM_SETTEXT> into a read-only edit is a re-entrancy/crash trap.
+Arrow clicks surface as C<WM_VSCROLL> from the buddy. Requires C<ICC_UPDOWN_CLASS>.
+
+The buddy's own hot-track/click repaints can erase its arrow glyphs under the poll-based pump (seen on dark-mode +
+Strawberry). Two driver-side guards keep the arrows rendered: a deterministic C<InvalidateRect>+C<UpdateWindow> right
+after mount, and C<_repaint_active_spin_arrows> (called from C<poll_events> every tick) which repaints any spin buddy
+the cursor is currently over (plus one repaint on the cursor-exit transition).
+
+=item C<progress_bar> - C<msctls_progress32>, plain determinate (smooth), range/position via
+C<PBM_SETRANGE32>/C<PBM_SETPOS>. Requires C<ICC_PROGRESS_CLASS>.
+
+=item C<toggle_switch> / C<toggle_button> - a C<BUTTON> with C<BS_AUTOCHECKBOX | BS_PUSHLIKE>
+(C<0x50001003>): auto-toggles itself on click and reads back via C<BM_GETCHECK>, exactly like a checkbox
+but rendered as a sticky pushed button.
+
+=item C<link_button> - a C<BUTTON> with C<BS_FLAT> (C<0x50008000>): an edge-less click target that posts
+the same C<BN_CLICKED> notification as a plain button. (A true C<SysLink> would require the comctl32 v6
+manifest; BS_FLAT keeps the app manifest-free.)
+
+=back
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji::Driver> - the interface contract this backend implements
+
+=item * L<Uji> - The Message Round-Trip, Annotated (steps 2-4 are this module)
+
+=item * L<Affix> - the FFI layer used for every Win32 call
+
+=item * C<t/lib/MockDriver.pm> - the headless mock beating this driver's contract
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+WM_COMMAND WM_HSCROLL WM_VSCROLL WM_SIZE WM_GETMINMAXINFO WM_DESTROY WM_CTLCOLOR WM_CTLCOLORSTATIC WM_CTLCOLOREDIT
+WM_CTLCOLORBTN SetWindowTextW EnableWindow SetFocus ShowWindow SetWindowPos GetClientRect GetTextExtentPoint32W
+PeekMessageW TranslateMessage DispatchMessageW CreateWindowExW InitCommonControlsEx TBM_SETPOS TBM_SETRANGE
+TBM_SETLINESIZE TBM_GETPOS BM_GETCHECK BM_SETCHECK EM_SETREADONLY EM_LIMITTEXT EM_SETCUEBANNER EM_SETPASSWORDCHAR
+EM_SETSEL WM_SETFONT CreateFontIndirectW GetSysColorBrush SetTextColor SetBkColor InvalidateRect SW_MINIMIZE
+SW_MAXIMIZE SW_RESTORE SW_SHOW SW_HIDE MSWin32 hashref hwnd testbackends FFI XS affixes rcarr trackbar
+msctls_trackbar32 msctls_updown32 msctls_progress32 UDM_SETRANGE32 UDM_SETPOS32 UDM_GETPOS32 UDM_SETACCEL UDACCEL
+UDS_ARROWKEYS PBM_SETRANGE32 PBM_SETPOS SSize_t sab listbox combobox productization testbackends ES_PASSWORD
+ES_MULTILINE ES_AUTOVSCROLL ES_AUTOHSCROLL WS_TABSTOP WS_VSCROLL recreate_node mount-only mountonly DefWindowProcW
+wParam lParam COLOR_WINDOW COLOR_BTNFACE DC
+
+=end stopwords
+
+=cut

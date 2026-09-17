@@ -1,0 +1,110 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Text - a static text label
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::text( 'Count: ' . $model->{count} );
+
+    # Horizontal alignment:
+    Uji::text( 'Centered title', align => 'center', flex => 1 );
+
+    # Flex and the common parameters:
+    Uji::text( 'A long legal paragraph', flex => 1, visible => $model->{show_extra} );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::Text> is a static label. It renders a string and shows nothing at all beyond that string; there is no
+interaction, no value, and no event. The text is a plain string - the toolkit does no markup interpretation, so a
+literal C<E<lt>HelloE<gt>> would display the angle brackets verbatim. Text may optionally be horizontally aligned with
+C<align> and coloured with C<color> or C<background>.
+
+=head1 Constructor
+
+=head2 C<new ( $label, %params )>
+
+You normally use the L<Uji|Uji/text> helper, which accepts the label as the first positional argument:
+
+    Uji::text( 'Hello, ' . $model->{name} );
+
+...is equivalent to...
+
+    Uji::Node::Text->new( label => 'Hello, ' . $model->{name} );
+
+=head3 Parameters
+
+=head4 C<label>
+
+The text content. Default C<''>. Recomposed live - when the label changes, the reconciler issues a
+L<set_prop|Uji::Driver::Win32/set_prop>(C<'label'>) and the native control redraws.
+
+=head4 C<align>
+
+Horizontal text alignment inside the control. One of C<'left'> (default), C<'center'>, or C<'right'>. Maps to the
+C<SS_CENTER>, C<SS_RIGHT>, or C<SS_LEFT> flags. Recomposed live (requires C<recreate_node>; see
+L<Uji::Reconciler/Recreation>).
+
+=head3 Inherited Parameters
+
+L<Uji::Node::Text> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>, including C<flex>,
+C<enabled>, C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, C<color>, C<background>, C<font>, C<font_size>, and C<id>.
+
+=head1 Methods
+
+=head2 C<label>
+
+Returns the current text.
+
+=head2 C<align>
+
+Returns C<'left'>, C<'center'>, or C<'right'>.
+
+=head2 C<type>
+
+Returns the string C<'text'>.
+
+=head1 How it Works
+
+On Win32 this renders as a C<STATIC> control created with C<WS_CHILD | WS_VISIBLE>. Because a label has no state of its
+own, everything except the string (position via layout, visibility, color) is driven purely from the model through the
+reconciler.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<text>)
+
+=item * L<Uji::Node> - base class and common parameters
+
+=item * L<Uji::Node::Button> - the interactive cousin
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+STATIC flex WS_CHILD WS_VISIBLE hashmarkup markup
+
+=end stopwords
+
+=cut

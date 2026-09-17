@@ -1,0 +1,102 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::ProgressBar - a determinate progress indicator
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::progress_bar( value => $model->{level}, min => 0, max => 100 );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::ProgressBar> is a read-only bar that shows C<value> between C<min> and C<max>. It has no callbacks: the
+bar I<is> the model, so all you do is keep C<value> current and the reconciler repaints it. Because it never fires, it
+is purely a view of a model field.
+
+C<value> is clamped to the range; C<min> and C<max> may change live (for example, repurposing a 0..100 bar as a
+0..1,000,000 byte counter).
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/progress_bar> helper:
+
+    Uji::progress_bar( value => $xfer->{sent}, min => 0, max => $xfer->{total} );
+
+=head3 Parameters
+
+=head4 C<value>
+
+The current position. Default C<0>. Recomposed live.
+
+=head4 C<min> / C<max>
+
+The range. Defaults C<0> and C<100>. Recomposed live.
+
+=head3 Inherited Parameters
+
+L<Uji::Node::ProgressBar> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, C<color>, C<background>, C<font>, C<font_size>, and C<id>. Its nature is
+C<value>, and its FILL when given no size.
+
+=head1 Methods
+
+=head2 C<value>
+
+Returns the current position.
+
+=head2 C<min> / C<max>
+
+Return the range bounds.
+
+=head2 C<type>
+
+Returns the string C<'progress_bar'>.
+
+=head1 How it Works
+
+On Win32 a progress bar is a child C<msctls_progress32> control created with C<WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS |
+PBS_SMOOTH>, so the fill is a solid block rather than segmented blocks. Mount and C<set_prop('min'|'max')> set the range
+with C<PBM_SETRANGE32> (which takes C<min> in wParam and C<max> in lParam as B<separate> values - packing them like the
+trackbar produced a 0..6,553,600 range and a bar that never filled); C<value> goes through C<PBM_SETPOS> after clamping
+to the range.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - the toolkit entry point (exports C<progress_bar>)
+
+=item * L<Uji::Node::Slider>, L<Uji::Node::SpinBox> - the interactive companions
+
+=item * L<Uji::Node> - the base node class and shared parameters
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+PBS_SMOOTH PBM_SETRANGE32 PBM_SETPOS msctls_progress32 WS_CHILD WS_VISIBLE WS_CLIPSIBLINGS clamps
+
+=end stopwords
+
+=cut

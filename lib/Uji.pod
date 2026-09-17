@@ -126,7 +126,8 @@ An Uji application is three callbacks passed to L</app>:
 =item C<init( )>
 
 Returns C<< ( $initial_model, $initial_cmd ) >>. Runs once at startup. The C<$cmd> half is reserved for background
-side-effects and is currently unused; return C<undef>.
+side-effects and is currently unused; return C<undef>. Time and platform events reach C<update> through
+L</Subscriptions> instead.
 
 =item C<update( $msg, $model )>
 
@@ -177,8 +178,35 @@ ignore the event). The arguments differ per widget:
     toggle_switch / toggle_button
                 on_toggle -> sub ($on)    { ... }   # 1 or 0
     radio_group on_select -> sub ($value) { ... }   # selected option's value
+    combo_box / list_box
+                on_select -> sub ($value) { ... }   # selected option's value
+    list_view   on_select -> sub ($value) { ... }   # selected row's value (arrayref with C<multiple>)
+    tree_view   on_select -> sub ($value) { ... }   # selected item's value
+    tab_panel   on_select -> sub ($index) { ... }   # selected panel index
 
 =back
+
+=head3 Subscriptions
+
+User gestures are not the only source of messages. A model can also ask for messages from the outside world - a timer
+firing, the window being resized - with a B<subscription>. You declare what the current model wants in the
+C<subscriptions> callback passed to L</app>, and the runtime delivers those messages through the very same C<update>
+path:
+
+    Uji::app(
+        init          => \&init,
+        update        => \&update,
+        view          => \&view,
+        subscriptions => sub ($model) {
+            return [
+                Uji::sub_interval( 1000, { type => 'TICK' } ),
+                Uji::sub_on_resize( { type => 'WINDOW_RESIZED' } ),
+            ];
+        }
+    )->run;
+
+Subscriptions are reconciled after every render: new ones start, ones the model no longer asks for stop, and a
+surviving timer keeps its phase. See L<Uji::Sub> for the details.
 
 =head2 The Render Pipeline
 
@@ -200,6 +228,9 @@ C<update>, and then C<view> is called once, producing a new virtual tree.
 
 =item 6. A reconciler diffs the new tree against the old one and issues the smallest set of native
 updates (positions, text, check state, ...).
+
+=item 7. The subscription set is reconciled against the new model: timers start or stop, and resize
+listeners deliver their messages on the next event.
 
 =back
 
@@ -241,10 +272,29 @@ Constructs the application runtime. Returns a L<Uji::App> object; call C<run> on
 
 Optional parameters (rarely needed):
 
-    driver      # a Uji::Driver instance (default: Uji::Driver::detect)
-    channel     # a message channel
-    reconciler  # a Uji::Reconciler
-    layout      # a Uji::Layout
+    driver        # a Uji::Driver instance (default: Uji::Driver::detect)
+    channel       # a message channel
+    reconciler    # a Uji::Reconciler
+    layout        # a Uji::Layout
+    subscriptions # sub ($model) { ... } - see L</Subscriptions>
+
+=head2 C<sub_interval ( $ms, $msg, %opts )>
+
+Requests C<$msg> every C<$ms> milliseconds as long as the C<subscriptions> callback returns it. C<$msg> can be a
+message hashref or a coderef called with the current time in milliseconds. The timer keeps its phase across renders and
+stops as soon as the subscription is dropped:
+
+    Uji::sub_interval( 1000, { type => 'TICK' } );
+
+See L<Uji::Sub/sub_interval>.
+
+=head2 C<sub_on_resize ( $msg, %opts )>
+
+Requests C<$msg> whenever the window is resized, as long as the C<subscriptions> callback returns it:
+
+    Uji::sub_on_resize( { type => 'WINDOW_RESIZED' } );
+
+See L<Uji::Sub/sub_on_resize>.
 
 =head2 C<window ( %args )>
 
@@ -705,6 +755,348 @@ C<undef>).
 
 =back
 
+=head2 C<list_view ( %args )>
+
+A multi-column, scrollable selection list (a table); a single selection by default, or multiple selections with
+C<multiple>.
+
+    Uji::list_view(
+        value   => $model->{sku},
+        columns => [
+            { label => 'SKU',   width => 120 },
+            { label => 'Name',  width => 200 },
+            { label => 'Price', width => 80 },
+        ],
+        rows => [
+            ['AB-12', 'Apples',  '3'],
+            { value => 'CD-34', columns => ['CD-34', 'Cherries', '5'] },   # value defaults to the first cell
+        ],
+        on_select => sub ($v) { { type => 'SET_SKU', value => $v } }
+    );
+
+    # Multi-select: ordinary clicks toggle each row; value is an arrayref.
+    Uji::list_view(
+        multiple => 1,
+        value    => ['AB-12', 'CD-34'],
+        columns  => [ { label => 'SKU', width => 120 } ],
+        rows     => [
+            { value => 'AB-12', columns => ['AB-12'] },
+            { value => 'CD-34', columns => ['CD-34'] },
+        ],
+        on_select => sub ($v) { { type => 'SET_PICKS', value => $v } }
+    );
+
+=over
+
+=item C<value>
+
+The selected row's C<value>. With C<multiple> it is an arrayref of selected row values. Default C<''>.
+
+=item C<columns>
+
+Array reference of C<< { label => ..., width => ... } >> hashrefs. C<width> defaults to the measured label width.
+
+=item C<rows>
+
+Array reference of rows, each an arrayref of cell strings or a C<< { value => ..., columns => [...] } >> hashref (the
+C<value> defaults to the first cell).
+
+=item C<multiple>
+
+Boolean, default false. When true the table allows several rows to be selected at once; the value and the C<on_select>
+argument become arrayrefs of the selected row values.
+
+=item C<full_row_select>
+
+Boolean, default false. When true the whole row highlights on selection.
+
+=item C<grid_lines>
+
+Boolean, default false. When true the table draws cell separator lines.
+
+=item C<header>
+
+Boolean, default true. When false the column header bar is hidden.
+
+=item C<on_select>
+
+Callback receiving the selected row's C<value> (or an arrayref of them for C<multiple> tables). Returns a message (or
+C<undef>).
+
+=back
+
+=head2 C<status_text ( $label, %args )>
+
+A one-line read-only label - a status line or banner. The first argument is positional.
+
+    Uji::status_text( $model->{status}, align => 'center' );
+
+=over
+
+=item C<label>
+
+The text. Default C<''>. Recomposed live.
+
+=item C<align>
+
+C<'left'> (default), C<'center'>, or C<'right'>. Fixed at mount time (the C<SS_*> style is baked into the STATIC
+control; requires C<recreate_node>).
+
+=back
+
+=head2 C<status_bar ( %args )>
+
+A status bar at the bottom of the window with one or more proportional panes.
+
+    Uji::status_bar( panels => [ 'Hull integrity OK', $model->{answers} . ' answers', 'v1.0' ] );
+
+=over
+
+=item C<label>
+
+The single-pane text. Default C<''>. Recomposed live.
+
+=item C<panels>
+
+An arrayref of pane texts. When non-empty it overrides C<label>: one pane per entry, widths split proportionally.
+Recomposed live.
+
+=back
+
+=head2 C<group_box ( %args )>
+
+An etched frame with a title band around a set of controls; a plain layout container with visual grouping only.
+
+    Uji::group_box(
+        label    => 'Sound settings',
+        padding  => 10,
+        spacing  => 8,
+        children => [
+            Uji::checkbox( label => 'Loud mode', checked => $model->{loud}, on_toggle => ... ),
+            Uji::button(  label => 'Shout',      on_click => ... ),
+        ],
+    );
+
+=over
+
+=item C<label>
+
+The title in the frame's top band. Default C<''>. Recomposed live.
+
+=item C<children>
+
+An arrayref of child nodes, composed like a column. Recomposed live.
+
+=item C<padding>
+
+The inset between the inner rect and the first/last child. Default C<8>.
+
+=item C<spacing>
+
+The gap between consecutive children. Default C<6>.
+
+=back
+
+=head2 C<scroll_view ( $child, %opts )>
+
+A viewport that clips one content subtree and shows native scrollbars when it overflows. The first argument is positional.
+
+    Uji::scroll_view(
+        Uji::column( spacing => 6, padding => 6,
+            children => [ map { Uji::text("Line $_") } 1 .. 30 ] ),
+        orientation => 'vertical',
+        on_scroll   => sub ($x, $y) { { type => 'SCROLLED', x => $x, y => $y } }
+    );
+
+=over
+
+=item C<orientation>
+
+C<'vertical'> (default), C<'horizontal'>, or C<'both'>. Fixed at mount time (requires C<recreate_node>).
+
+=item C<scroll_x> / C<scroll_y>
+
+The initial scroll offsets in px (default C<0>). Recomposed live; out-of-range offsets are clamped.
+
+=item C<on_scroll>
+
+A callback receiving C<($x, $y)>, the current offsets. Return a message (or C<undef>).
+
+=back
+
+Content is laid out at its natural size and moved inside the clipped window, so it never wraps or shrinks; with no
+main size the viewport FILLs its container.
+
+=head2 C<split_view ( $a, $b, %opts )>
+
+A resizable two-pane split. The two panes are positional.
+
+    Uji::split_view(
+        Uji::column( children => [ Uji::text('File'), Uji::button( label => 'Open', ... ) ] ),
+        Uji::scroll_view( Uji::multiline_text( value => $model->{body}, ... ) ),
+        orientation => 'horizontal',
+        divider     => 260,
+        on_divider  => sub ($pos) { { type => 'SET_DIVIDER', value => $pos } }
+    );
+
+=over
+
+=item C<orientation>
+
+C<'vertical'> (default) stacks the panes top-to-bottom; C<'horizontal'> places them side by side. Fixed at mount time.
+
+=item C<divider>
+
+Pane A's extent in px along the main axis. C<undef> (default) centers the split. Recomposed live; clamped to the pane
+minima.
+
+=item C<divider_w>
+
+The drag-handle thickness in px. Default C<6>.
+
+=item C<min_a> / C<min_b>
+
+The minimum main-axis extent (px) of each pane. Defaults C<40>.
+
+=item C<on_divider>
+
+A callback receiving the clamped divider position after a drag. Return a message (or C<undef>).
+
+=back
+
+=head2 C<tab_panel ( %args )>
+
+A tabbed set of switchable sub-views.
+
+    Uji::tab_panel(
+        panels => [
+            { title => 'Editor',  child => Uji::multiline_text( value => $model->{body}, ... ) },
+            { title => 'Preview', child => Uji::scroll_view( Uji::text($model->{html}) ) },
+            { title => 'Files' },
+        ],
+        index     => $model->{tab},
+        on_select => sub ($i) { { type => 'SET_TAB', value => $i } }
+    );
+
+=over
+
+=item C<panels>
+
+An arrayref of C<< { title => '...', child => ... } >> hashrefs (or C<< [ $title, $child ] >> arrayrefs). The C<child>
+may be omitted for an empty panel. Default C<[]>.
+
+=item C<index>
+
+The selected panel index (0-based). Default C<0>. Recomposed live (flips the visible panel without rebuilding the tab).
+
+=item C<on_select>
+
+A callback receiving the newly selected index. Return a message (or C<undef>).
+
+=back
+
+=head2 C<tree_view ( %args )>
+
+A hierarchical selection tree stored as nested hashrefs in the model.
+
+    Uji::tree_view(
+        value    => 'b1',
+        nodes    => [
+            { value => 'a', label => 'Alpha', children => [
+                { value => 'a1', label => 'A-one' },
+                { value => 'a2', label => 'A-two' },
+            ]},
+            { value => 'b', label => 'Bravo', children => [
+                { value => 'b1', label => 'B-one' },
+            ]},
+        ],
+        expanded  => ['a'],
+        on_select => sub ($v) { { type => 'SET_BRANCH', value => $v } }
+    );
+
+=over
+
+=item C<value>
+
+The selected item's C<value>. Default C<undef>. Recomposed live (a cheap C<TVM_SELECTITEM>; changing C<nodes> rebuilds).
+
+=item C<nodes>
+
+An arrayref of C<< { value => ..., label => ..., children => [...] } >> hashrefs; C<label> defaults to C<value>, and
+C<children> is optional. Recomposed live by rebuilding the item tree.
+
+=item C<expanded>
+
+An arrayref of C<value> strings that should be expanded. Default C<[]>. Recomposed live.
+
+=item C<on_select>
+
+A callback receiving the selected item's C<value>. Return a message (or C<undef>).
+
+=back
+
+=head2 C<toolbar ( %args )>
+
+A horizontal row of text actions with optional separators.
+
+    Uji::toolbar(
+        buttons => [
+            { label => 'New',   id => 'new' },
+            { label => 'Open',  id => 'open' },
+            { label => '',        id => 'sep', separator => 1 },
+            { label => 'Save',  id => 'save', checked => 1 },
+        ],
+        on_click => sub ($id) { { type => 'TB_CLICK', id => $id } }
+    );
+
+=over
+
+=item C<buttons>
+
+An arrayref of C<< { label => '...', id => '...', separator => 0, checked => 0, enabled => 1 } >> descriptors. Default
+C<[]>. Recomposed live by rebuilding the native button set.
+
+=item C<on_click>
+
+A callback receiving the clicked button's C<id>. Return a message (or C<undef>).
+
+=back
+
+=head2 C<menu_bar ( %args )>
+
+A window frame menu bar; attach it to L</window> with C<< menu_bar => ... >> rather than placing it as a layout child.
+
+    Uji::menu_bar(
+        items => [
+            { label => 'File', children => [
+                { label => 'New',  id => 'new' },
+                { label => 'Exit', id => 'exit' },
+            ]},
+            { label => 'Edit', children => [
+                { label => 'Undo', id => 'undo' },
+                { separator => 1 },
+                { label => 'Search', id => 'search' },
+            ]},
+        ],
+        on_click => sub ($id) { { type => 'MENU_CLICK', id => $id } }
+    );
+
+=over
+
+=item C<items>
+
+A recursive arrayref of menu items. A C<< { label => '...', children => [...] } >> item becomes a drop-down submenu; a
+leaf becomes a command item. Item keys: C<label>, C<id> (defaults to the label), C<children>, C<separator> (a divider
+line), C<enabled> (C<0> grey-out), and C<checked> (draws a checkmark).
+
+=item C<on_click>
+
+A callback receiving the chosen leaf item's C<id>. Return a message (or C<undef>).
+
+=back
+
+The window's client area shrinks by the height of the native menu band; layout runs against the reduced area.
+
 =head1 COMMON NODE PARAMETERS
 
 Every widget (and the window) accepts the following parameters, provided by the base class L<Uji::Node>:
@@ -807,7 +1199,10 @@ C<update> function.
 L<Uji::Node::Password>, L<Uji::Node::Slider>,
 L<Uji::Node::SpinBox>, L<Uji::Node::ProgressBar>, L<Uji::Node::Checkbox>, L<Uji::Node::ToggleSwitch>,
 L<Uji::Node::ToggleButton>, L<Uji::Node::LinkButton>, L<Uji::Node::Radio>, L<Uji::Node::RadioGroup>,
-L<Uji::Node::ComboBox>, L<Uji::Node::ListBox>, L<Uji::Node::Column>, L<Uji::Node::Row>, L<Uji::Node::Window>
+L<Uji::Node::ComboBox>, L<Uji::Node::ListBox>, L<Uji::Node::ListView>, L<Uji::Node::TreeView>,
+L<Uji::Node::StatusText>, L<Uji::Node::StatusBar>, L<Uji::Node::GroupBox>, L<Uji::Node::ScrollView>,
+L<Uji::Node::SplitView>, L<Uji::Node::TabPanel>, L<Uji::Node::Toolbar>, L<Uji::Node::MenuBar>,
+L<Uji::Node::Column>, L<Uji::Node::Row>, L<Uji::Node::Window>
 
 =item * L<Uji::Layout> - the pure-Perl layout engine
 

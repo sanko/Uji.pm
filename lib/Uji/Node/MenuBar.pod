@@ -1,0 +1,113 @@
+=pod
+
+=encoding UTF-8
+
+=head1 NAME
+
+Uji::Node::MenuBar - a window frame menu bar
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    my $mb = Uji::menu_bar(
+        items => [
+            {
+                label    => 'File',
+                children => [
+                    { label => 'New',   id => 'new'  },
+                    { label => 'Open',  id => 'open' },
+                    { label => 'Exit',  id => 'exit' },
+                ],
+            },
+            {
+                label    => 'Edit',
+                children => [
+                    { label => 'Undo', id => 'undo' },
+                    { separator => 1 },
+                    { label => 'Search', id => 'search' },
+                ],
+            },
+        ],
+        on_click => sub ($id) { { type => 'MENU_CLICK', id => $id } },
+    );
+
+    Uji::app(
+        driver => $driver,
+        view   => sub ($model) {
+            Uji::window(
+                title    => $model->{title},
+                menu_bar => $mb,
+                child    => Uji::column( children => [ ... ] ),
+            );
+        },
+    );
+
+=head1 DESCRIPTION
+
+A C<menu_bar> is attached to a L<Uji::Node::Window> frame, B<not> placed as a layout child. The window's visible client
+area shrinks by the height of the native menu bar band; everything else lays out against the reduced area
+automatically.
+
+Menu items are described as a recursive list of hashrefs. Two top-level shapes are used:
+
+=over 4
+
+=item * A top-level menu: C<< { label => 'File', children => [...] } >> - becomes a drop-down submenu.
+
+=item * A top-level leaf (rare): C<< { label => 'About', id => 'about' } >> - becomes a command item on the bar.
+
+=back
+
+Supported item keys:
+
+=over 4
+
+=item C<label>
+
+The text shown for the item. Required for menus and leaves; ignored on separators.
+
+=item C<id>
+
+The value handed to C<on_click> when the item is chosen. Optional; defaults to the label.
+
+=item C<children>
+
+An arrayref of nested items. Present on a menu item means "open a submenu here".
+
+=item C<separator>
+
+When true, the item is a horizontal divider line. All other keys are ignored.
+
+=item C<enabled>
+
+When explicitly C<0> the item is drawn greyed out and unclickable. Default is enabled.
+
+=item C<checked>
+
+When true, the item draws a checkmark beside its label. Default is unchecked.
+
+=back
+
+=head2 on_click
+
+    on_click => sub ($id) { ... }
+
+Called when any enabled leaf item is chosen (including a submenu leaf, no matter how deep). C<$id> is the item's C<id>
+(or label). The returned message is pushed to the driver channel, so the app loop can route it like any other widget
+event - C<undef> is fine for a no-op.
+
+=head1 MOUNTING
+
+The driver attaches the native menu with C<SetMenu> during window mount, B<before> the client area is measured, so the
+layout engine sees the reduced space. Changes are applied through the reconciler's C<set_prop('menu_bar')> path, which
+destroys the old menu tree and rebuilds it. The menu bar is torn down on unmount.
+
+Each leaf item receives a driver-wide command id (0x4000+, shared allocator with toolbar buttons) so C<WM_COMMAND>
+routing never collides with registry control ids.
+
+=head1 SEE ALSO
+
+L<Uji::Node::Window>, L<Uji::Node::Toolbar>, L<Uji::Reconciler>, L<Uji::Driver::Win32>
+
+=cut

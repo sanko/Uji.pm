@@ -1,0 +1,114 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Checkbox - a toggle box
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::checkbox(
+        label     => 'Dark mode',
+        checked   => $model->{dark},
+        on_toggle => sub ($on) { { type => 'TOGGLE_DARK', value => $on } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::Checkbox> is a labeled toggle box. It is B<stateful in the model>: I<checked> is a plain boolean the model
+owns. Clicking fires L</on_toggle> with the control's I<actual post-click state> (read back from the native control),
+so the message update always agrees with what the user sees - nothing is guessed.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/checkbox> helper.
+
+=head3 Parameters
+
+=head4 C<label>
+
+The text shown beside the box. Default C<''>.
+
+=head4 C<checked>
+
+C<1> for checked, C<0> for unchecked. Default C<0>. Recomposed live by the reconciler.
+
+=head4 C<on_toggle>
+
+A callback receiving the new state (C<1> or C<0>) on every click:
+
+    on_toggle => sub ($on) { { type => 'TOGGLE_DARK', value => $on } }
+
+Return a message hashref (or C<undef> to ignore the event).
+
+=head3 Inherited Parameters
+
+L<Uji::Node::Checkbox> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, and C<id>.
+
+=head1 Methods
+
+=head2 C<label>
+
+Returns the adjacent text.
+
+=head2 C<checked>
+
+Returns C<1> or C<0>.
+
+=head2 C<on_toggle>
+
+Returns the callback (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'checkbox'>.
+
+=head1 How it Works
+
+On Win32 the box is a C<BUTTON> control created with C<BS_AUTOCHECKBOX> (C<0x3> - the I<auto> variety: the button
+toggles itself on click and posts C<BN_CLICKED>; the manual C<BS_CHECKBOX>, C<0x2>, never does). The driver then reads
+the state back with C<BM_GETCHECK> and passes the I<true> result to C<on_toggle>. Programmatic check changes use
+C<BM_SETCHECK>.
+
+The same structure powers L<Uji::Node::Radio|Uji::Node::Radio>; radios use C<BS_AUTORADIOBUTTON> and exclusive grouping
+instead.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<checkbox>)
+
+=item * L<Uji::Node::Radio>, L<Uji::Node::RadioGroup> - the exclusive-selection siblings
+
+=item * L<Uji::Node> - base class and common parameters
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+BS_AUTOCHECKBOX BS_CHECKBOX BS_AUTORADIOBUTTON BN_CLICKED BM_GETCHECK BM_SETCHECK recomposed hashref hwnd
+
+=end stopwords
+
+=cut

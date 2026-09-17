@@ -1,0 +1,132 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::MultilineText - a multi-line text editor
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::multiline_text(
+        value    => $model->{body},
+        readonly => 1,
+        color    => '#0F7B0F',
+        on_input => sub ($text) { { type => 'SET_BODY', value => $text } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::MultilineText> is a multi-line editable text area built on the same machinery as
+L<Uji::Node::TextInput|Uji::Node::TextInput>. Like its parent it is a B<two-way> widget: the model supplies C<value>,
+every keystroke fires L</on_input> with the I<full text>, and the reconciler only pushes text back when it actually
+differs.
+
+The only difference from a text input is that C<multiline> is always on and cannot be changed; there is nothing to
+recompose for it. Everything else is inherited.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/multiline_text> helper.
+
+=head3 Parameters
+
+All parameters of L<Uji::Node::TextInput|Uji::Node::TextInput> are accepted and inherited: C<value>, C<on_input>,
+C<readonly>, C<maxlength>, C<focused>, plus the common parameters from L<Uji::Node|Uji::Node/Parameters>.
+
+=over
+
+=item * C<value>
+
+The full text of the editor. Default C<''>. Recomposed live.
+
+=item * C<on_input>
+
+Callback receiving the full current text on every edit; returns a message hashref (or C<undef>).
+
+=item * C<readonly>, C<maxlength>, C<focused>
+
+Exactly as documented for L<Uji::Node::TextInput|Uji::Node::TextInput>. Recomposed live.
+
+=item * C<color>
+
+Foreground text colour as a C<'#RRGGBB'> string (optional). Recomposed live via
+L<C<set_prop>|Uji::Driver::Win32/set_prop>. The native control is repainted after the colour changes.
+
+=back
+
+=head3 Inherited Parameters
+
+Inherits the full parameter set from L<Uji::Node::TextInput|Uji::Node::TextInput>, which in turn inherits the common
+parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>, C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>,
+and C<id>.
+
+=head1 Methods
+
+=head2 C<multiline>
+
+Always returns C<1>. Overrides the parent reader because the value is a fixed constant for this node type (not a
+parameter).
+
+=head2 C<value>
+
+Returns the current text value.
+
+=head2 C<on_input>
+
+Returns the callback (or C<undef>).
+
+=head2 C<readonly>, C<maxlength>, C<focused>
+
+Return the current parameter values.
+
+=head2 C<type>
+
+Returns the string C<'multiline_text'>.
+
+=head1 How it Works
+
+On Win32 this is an C<EDIT> control with C<WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | WS_TABSTOP | ES_MULTILINE |
+ES_AUTOVSCROLL>. C<WS_TABSTOP> lets Tab move focus away instead of inserting a tab character, and I<ES_AUTOVSCROLL>
+scrolls to keep the caret visible as the text grows. Text and selection mechanics otherwise match
+L<Uji::Node::TextInput|Uji::Node::TextInput>.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<multiline_text>)
+
+=item * L<Uji::Node::TextInput> - the parent widget (most behavior lives there)
+
+=item * L<Uji::Node::Password> - the masked single-line variant
+
+=item * L<Uji::Node> - base class and the three-layer property pattern
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+EDIT ES_MULTILINE ES_AUTOVSCROLL WS_CHILD WS_VISIBLE WS_BORDER WS_VSCROLL WS_TABSTOP recomposed
+
+=end stopwords
+
+=cut

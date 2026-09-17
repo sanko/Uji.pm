@@ -1,0 +1,117 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::ToggleButton - a push button that stays checked until clicked again
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::toggle_button(
+        label     => 'Bold',
+        checked   => $model->{bold},
+        on_toggle => sub ($on) { { type => 'SET_BOLD', value => $on } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::ToggleButton> is a two-state push button: click it once and it latches (pushed-in highlight), click again
+and it releases. The latched state is the boolean C<checked>.
+
+It is the visual sibling of L<Uji::Node::ToggleSwitch|Uji::Node::ToggleSwitch> (same model contract - a C<checked>
+boolean and an C<on_toggle> callback) with a button-like look. Pick the toggle button for toolbar-y, demarcated
+on/off actions and the switch for settings rows.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/toggle_button> helper.
+
+=head3 Parameters
+
+=head4 C<label>
+
+The text drawn on the button face. Default C<''>.
+
+=head4 C<checked>
+
+The boolean state. Default C<0>. Recomposed live through C<set_prop('checked')>.
+
+=head4 C<on_toggle>
+
+A callback receiving the new boolean:
+
+    on_toggle => sub ($on) { { type => 'SET_BOLD', value => $on } }
+
+The argument is C<1> when the button latched and C<0> when it released. Return a message hashref (or C<undef> to ignore
+the event).
+
+=head3 Inherited Parameters
+
+L<Uji::Node::ToggleButton> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, and C<id>.
+
+=head1 Methods
+
+=head2 C<label>
+
+Returns the button text.
+
+=head2 C<checked>
+
+Returns the boolean state (C<1> or C<0>).
+
+=head2 C<on_toggle>
+
+Returns the toggle callback (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'toggle_button'>.
+
+=head1 How it Works
+
+On Win32 a toggle button is a child C<BUTTON> control created with C<BS_AUTOCHECKBOX | BS_PUSHLIKE>: the auto-checkbox
+behavior makes the native control flip itself on click, and the push-like style gives it the raised "stays pressed"
+look (as opposed to a check mark). Clicks post C<BN_CLICKED> (C<WM_COMMAND>); the driver reads the fresh state with
+C<BM_GETCHECK> and calls L</on_toggle>. Mount and C<set_prop('checked')> apply the model state with C<BM_SETCHECK>.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - the toolkit entry point (exports C<toggle_button>)
+
+=item * L<Uji::Node::ToggleSwitch> - the same contract, switch appearance
+
+=item * L<Uji::Node::Checkbox> - another two-state BUTTON-derived widget
+
+=item * L<Uji::Node> - the base node class and shared parameters
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+BS_AUTOCHECKBOX BS_PUSHLIKE BM_SETCHECK BM_GETCHECK BN_CLICKED hashref latched
+
+=end stopwords
+
+=cut

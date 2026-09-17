@@ -30,7 +30,7 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
             if ( defined $old_idx ) {
                 $paired[$old_idx] = 1;
-                $self->patch( $old[$old_idx], $new_vtree, $driver );
+                $self->patch( $old[$old_idx], $new_vtree, $driver, $new_vtree );
             }
             else {
                 $driver->mount($new_vtree);
@@ -45,7 +45,7 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         }
     }
 
-    method patch ( $old_node, $new_node, $driver ) {
+    method patch ( $old_node, $new_node, $driver, $ctx = undef ) {
         return unless $old_node && $new_node;
         $new_node->set_id( $old_node->id );
         $driver->update_registry($new_node);
@@ -92,6 +92,62 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             $driver->set_prop( $new_node->id, 'options', $new_node->options );
         }
 
+        # Check nodes/expanded (TreeView) -- rebuild the tree items when either changes.
+        if ( $new_node->type eq 'tree_view' ) {
+            if ( $self->_tree_key($old_node) ne $self->_tree_key($new_node) ) {
+                $driver->set_prop( $new_node->id, 'nodes', $new_node->nodes );
+            }
+            elsif (
+                join( "\0", map { '' . ( $_ // '' ) } @{ $old_node->expanded // [] } ) ne
+                join( "\0", map { '' . ( $_ // '' ) } @{ $new_node->expanded // [] } ) ) {
+                $driver->set_prop( $new_node->id, 'expanded', $new_node->expanded );
+            }
+        }
+
+        # Check columns/rows (ListView) -- rebuild the table items when either changes.
+        if ( $new_node->type eq 'list_view' ) {
+            if ( $self->_listview_key($old_node) ne $self->_listview_key($new_node) ) {
+                $driver->set_prop( $new_node->id, 'rows', $new_node->rows );
+            }
+        }
+
+        # Check panels (StatusBar) -- SB_SETPARTS + per-pane SB_SETTEXT
+        if ( $old_node->can('panels') && $new_node->can('panels') && join( "\0", @{ $old_node->panels } ) ne join( "\0", @{ $new_node->panels } ) ) {
+            $driver->set_prop( $new_node->id, 'panels', $new_node->panels );
+        }
+
+        # Check buttons (Toolbar) -- rebuild the button set when any label/id/state changes.
+        if ( $new_node->type eq 'toolbar' ) {
+            if ( $self->_buttons_key($old_node) ne $self->_buttons_key($new_node) ) {
+                $driver->set_prop( $new_node->id, 'buttons', $new_node->buttons );
+            }
+        }
+
+        # Check menu_bar (Window) -- rebuild the native menu when any item/label/id/state changes.
+        if ( $old_node->can('menu_bar') && $new_node->can('menu_bar') ) {
+            if ( $self->_menu_key( $old_node->menu_bar ) ne $self->_menu_key( $new_node->menu_bar ) ) {
+                $driver->set_prop( $new_node->id, 'menu_bar', $new_node->menu_bar );
+            }
+        }
+
+        # Check scroll offsets (ScrollView) -- re-apply to the shared scroll store
+        for my $p (qw[ scroll_x scroll_y ]) {
+            if ( $old_node->can($p) && ( $old_node->$p // 0 ) != ( $new_node->$p // 0 ) ) {
+                $driver->set_prop( $new_node->id, $p, $new_node->$p );
+            }
+        }
+
+        # Check divider / orientation (SplitView) -- move the divider strip (Layout re-lays-out the
+        # panes on every render, so the driver only needs to track the strip itself).
+        if ( $new_node->type eq 'split_view' ) {
+            if ( ( $old_node->orientation // '' ) ne ( $new_node->orientation // '' ) ) {
+                $driver->set_prop( $new_node->id, 'orientation', $new_node->orientation );
+            }
+            if ( ( $old_node->divider // '' ) ne ( $new_node->divider // '' ) ) {
+                $driver->set_prop( $new_node->id, 'divider', $new_node->divider );
+            }
+        }
+
         # Check range (Slider)
         if ( $old_node->can('min') && $old_node->can('max') ) {
             if ( $old_node->min ne $new_node->min ) {
@@ -108,17 +164,17 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         }
 
         # Check enabled (all widgets)
-        if ( $old_node->can('enabled') && $old_node->enabled != $new_node->enabled ) {
+        if ( $old_node->can('enabled') && ( $old_node->enabled // 0 ) != ( $new_node->enabled // 0 ) ) {
             $driver->set_prop( $new_node->id, 'enabled', $new_node->enabled );
         }
 
         # Check visible (all widgets)
-        if ( $old_node->can('visible') && $old_node->visible != $new_node->visible ) {
+        if ( $old_node->can('visible') && ( $old_node->visible // 0 ) != ( $new_node->visible // 0 ) ) {
             $driver->set_prop( $new_node->id, 'visible', $new_node->visible );
         }
 
         # Check focused (TextInput, Password)
-        if ( $old_node->can('focused') && $old_node->focused != $new_node->focused ) {
+        if ( $old_node->can('focused') && ( $old_node->focused // 0 ) != ( $new_node->focused // 0 ) ) {
             $driver->set_prop( $new_node->id, 'focused', $new_node->focused );
         }
 
@@ -128,12 +184,12 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         }
 
         # Check checked (Checkbox)
-        if ( $old_node->can('checked') && $old_node->checked != $new_node->checked ) {
+        if ( $old_node->can('checked') && ( $old_node->checked // 0 ) != ( $new_node->checked // 0 ) ) {
             $driver->set_prop( $new_node->id, 'checked', $new_node->checked );
         }
 
         # Check readonly / maxlength (TextInput, Password)
-        if ( $old_node->can('readonly') && $old_node->readonly != $new_node->readonly ) {
+        if ( $old_node->can('readonly') && ( $old_node->readonly // 0 ) != ( $new_node->readonly // 0 ) ) {
             $driver->set_prop( $new_node->id, 'readonly', $new_node->readonly );
         }
         if ( $old_node->can('maxlength') && $old_node->maxlength ne $new_node->maxlength ) {
@@ -165,16 +221,16 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         }
 
         # Window geometry / state (topmost, min/max, minimized, maximized)
-        if ( $old_node->can('topmost') && $old_node->topmost != $new_node->topmost ) {
+        if ( $old_node->can('topmost') && ( $old_node->topmost // 0 ) != ( $new_node->topmost // 0 ) ) {
             $driver->set_prop( $new_node->id, 'topmost', $new_node->topmost );
         }
         for my $p (qw[ minimized maximized ]) {
-            if ( $old_node->can($p) && $old_node->$p != $new_node->$p ) {
+            if ( $old_node->can($p) && ( $old_node->$p // 0 ) != ( $new_node->$p // 0 ) ) {
                 $driver->set_prop( $new_node->id, $p, $new_node->$p );
             }
         }
         for my $p (qw[ min_w min_h max_w max_h ]) {
-            if ( $old_node->can($p) && $old_node->$p ne $new_node->$p ) {
+            if ( $old_node->type eq 'window' && $old_node->$p ne $new_node->$p ) {
                 $driver->set_prop( $new_node->id, $p, $new_node->$p );
             }
         }
@@ -191,12 +247,53 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         my $old_children = $old_node->children;
         my $new_children = $new_node->children;
         my $max          = @$old_children > @$new_children ? @$old_children : @$new_children;
+
+        # Anchors: the nearest ancestor that owns real HWND placement. Children added under a
+        # window parent to the window; under a scroll_view they must parent to its viewport HWND
+        # and inherit its scroll store; under a group_box / tab_panel they are host-window siblings.
+        my $child_ctx
+            = ( $new_node->type eq 'window' || $new_node->type eq 'scroll_view' || $new_node->type eq 'group_box' || $new_node->type eq 'tab_panel' )
+            ? $new_node :
+            $ctx;
         for my $i ( 0 .. $max - 1 ) {
             my $old_child = $old_children->[$i];
             my $new_child = $new_children->[$i];
             if ( $old_child && $new_child ) {
-                $self->patch( $old_child, $new_child, $driver );
+                $self->patch( $old_child, $new_child, $driver, $child_ctx );
             }
+            elsif ($new_child) {
+
+                # Added child: mount it under the same HWND as its mounted siblings and inherit
+                # their scroll store, so rows appended inside a ScrollView content column land
+                # inside the viewport and offset with it (the scroll_view mount branch does this
+                # for its initial content; the sibling record carries the same parent/store).
+                # When the content column was EMPTY there is no sibling, so the anchor context
+                # ($child_ctx) supplies parent hwnd + store structurally instead.
+                my ( $parent_hwnd, $store );
+                for my $cand ( @$new_children, @$old_children ) {
+                    my $r = $driver->_get_registry_record( $cand->id );
+                    if ( $r && $r->{parent_hwnd} ) {
+                        $parent_hwnd = $r->{parent_hwnd};
+                        $store       = $r->{scroll};
+                        last;
+                    }
+                }
+                $driver->mount_subtree( $new_child, $child_ctx, $parent_hwnd, $store );
+            }
+            elsif ($old_child) {
+                $driver->unmount_subtree($old_child) if $driver->can('unmount_subtree');
+            }
+        }
+
+        # ScrollView: rows added/removed during this render change the content rect, but the
+        # scroll_view itself FILLS its parent, so its own bounds are unchanged and the generic
+        # bounds diff above never re-drives move_widget. Only a window resize did (WM_SIZE ->
+        # _relayout_now runs on the LIVE tree), which is why added rows were not accounted for
+        # until the user resized the window. Refresh placement/scrollbars after the child loop so
+        # the range tracks the new content immediately (idempotent when nothing changed).
+        if ( $new_node->type eq 'scroll_view' && $driver->can('_place_scrollbars') ) {
+            $driver->_place_scrollbars( $new_node->id );
+            $driver->_apply_scroll( $new_node->id ) if $driver->can('_apply_scroll');
         }
 
         # RadioGroup selection: diff AFTER the child loop so the radio children carry their
@@ -206,6 +303,20 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
                 $driver->set_prop( $new_node->id, 'value', $new_node->value );
             }
         }
+
+        # TabPanel selection / strip: diff AFTER the child loop so any NEW panel contents are
+        # mounted before the driver applies visibility (set_prop index -> _apply_tab shows the
+        # active subtree and hides the rest).
+        if ( $new_node->type eq 'tab_panel' && $new_node->can('index') ) {
+            if ( ( $old_node->index // 0 ) != ( $new_node->index // 0 ) ) {
+                $driver->set_prop( $new_node->id, 'index', $new_node->index );
+            }
+            my $okey = join "\0", map { ref $_ eq 'HASH' ? ( $_->{title} // $_->{label} // '' ) : ( $_->[0] // '' ) } @{ $old_node->panels };
+            my $nkey = join "\0", map { ref $_ eq 'HASH' ? ( $_->{title} // $_->{label} // '' ) : ( $_->[0] // '' ) } @{ $new_node->panels };
+            if ( $old_node->can('panels') && $okey ne $nkey ) {
+                $driver->set_prop( $new_node->id, 'panels', $new_node->panels );
+            }
+        }
     }
 
     # Canonical form of a node's options (value|label pairs joined by NUL).
@@ -213,9 +324,71 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         return join "\0", map { ( $_->{value} // '' ) . '|' . ( $_->{label} // '' ) } @{ $node->options // [] };
     }
 
+    # Canonical form of a tree_view node's items (recursive value|label with bracketed children).
+    method _tree_key ($node) {
+        my $s;
+        my $walk;
+        $walk = sub {
+            for my $it ( @{ $_[0] // [] } ) {
+                $s .= '[' . ( $it->{value} // '' ) . '|' . ( $it->{label} // '' );
+                $walk->( $it->{children} ) if $it->{children};
+                $s .= ']';
+            }
+        };
+        $walk->( $node->nodes );
+        return $s;
+    }
+
+    # Canonical form of a list_view node's table (columns first, then every row's value + cells).
+    method _listview_key ($node) {
+        my $s = 'c' . join "\0", map { ( $_->{label} // '' ) . '|' . ( $_->{width} // '' ) } @{ $node->columns // [] };
+        for my $r ( @{ $node->rows // [] } ) {
+            my $cells = ref $r eq 'HASH' ? $r->{columns} : $r;
+            $s .= ';r' . ( ref $r eq 'HASH' ? ( $r->{value} // '' ) : '' ) . '|' . join( ',', map { '' . ( $_ // '' ) } @{ $cells // [] } );
+        }
+        return $s;
+    }
+
     # Canonical form of a node's value: arrayref multi-selections are compared element-wise.
     method _value_key ($value) {
         return ref $value eq 'ARRAY' ? join "\0", map { '' . ( $_ // '' ) } @$value : '' . ( $value // '' );
+    }
+
+    # Canonical form of a toolbar node's buttons list (label|id|separator|checked|enabled).
+    method _buttons_key ($node) {
+        return join "\0", map {
+            ref $_ eq 'HASH' ?
+                join( '|',
+                ( $_->{label} // '' ),
+                ( $_->{id}    // '' ),
+                ( $_->{separator}       ? 's'                           : '' ),
+                ( $_->{checked}         ? 'c'                           : '' ),
+                ( defined $_->{enabled} ? ( $_->{enabled} ? 'e' : 'd' ) : '' ),
+                ( $_->{width} // '' ) ) :
+                ''
+        } @{ $node->buttons // [] };
+    }
+
+    # Canonical form of a window's menu_bar items (recursive label|id|separator|checked|enabled).
+    # Assigned to the WINDOW node (not the MenuBar node) since that is what patch() diffds.
+    method _menu_key ($mb) {
+        my $s = '';
+        my $walk;
+        $walk = sub {
+            for my $it ( @{ $_[0] // [] } ) {
+                $s
+                    .= '(' .
+                    ( $it->{label} // '' ) . '|' .
+                    ( $it->{id}    // '' ) .
+                    ( $it->{separator}       ? '|s'                             : '' ) .
+                    ( $it->{checked}         ? '|c'                             : '' ) .
+                    ( defined $it->{enabled} ? ( $it->{enabled} ? '|e' : '|d' ) : '' );
+                $walk->( $it->{children} ) if $it->{children};
+                $s .= ')';
+            }
+        };
+        $walk->( $mb && $mb->can('items') ? $mb->items : [] );
+        return $s;
     }
 };
 1;

@@ -1,0 +1,139 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::RadioGroup - an exclusive option group
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::radio_group(
+        value   => $model->{color},
+        options => [
+            { value => 'red',   label => 'Red' },
+            { value => 'green', label => 'Green' },
+            { value => 'blue',  label => 'Blue' }
+        ],
+        on_select => sub ($v) { { type => 'SET_COLOR', value => $v } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::RadioGroup> presents a set of exclusive options as a vertical column of radio buttons. The whole group is
+stored as a single scalar in the model (C<value>), so the model never has to track an array of booleans. Selecting an
+option fires L</on_select> with the option's C<value>.
+
+The group is B<memoizing>: its radio children are built once per instance and cached, with stable internal ids, so the
+native handles survive re-renders exactly like an unchanged widget's do.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/radio_group> helper.
+
+=head3 Parameters
+
+=head4 C<value>
+
+The currently selected option's C<value>. Default C<''>. Recomposed live by the reconciler.
+
+=head4 C<options>
+
+Array reference of option hashrefs:
+
+    { value => 'red', label => 'Red' }
+
+The C<label> defaults to the C<value> when omitted. Each becomes a L<Uji::Node::Radio|Uji::Node::Radio> child.
+
+=head4 C<on_select>
+
+A callback receiving the selected option's C<value>:
+
+    on_select => sub ($value) { { type => 'SET_COLOR', value => $value } }
+
+Return a message hashref (or C<undef>). The callback is shared verbatim by every radio child.
+
+=head4 C<padding> / C<spacing>
+
+The group lays out like a L<Uji::Node::Column|Uji::Node::Column>; these are its padding and gap. Defaults C<0> and
+C<4>.
+
+=head3 Inherited Parameters
+
+Inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>, C<visible>, C<tooltip>,
+C<x>/C<y>/C<w>/C<h>, and C<id>.
+
+=head1 Methods
+
+=head2 C<value>
+
+Returns the currently selected option's C<value>.
+
+=head2 C<options>
+
+Returns the option array reference.
+
+=head2 C<on_select>
+
+Returns the callback (or C<undef>).
+
+=head2 C<padding>, C<spacing>
+
+Return the container spacing parameters.
+
+=head2 C<children>
+
+Returns the cached radio children (built lazily on first call and reused thereafter).
+
+=head2 C<type>
+
+Returns the string C<'radio_group'>.
+
+=head1 How it Works
+
+On Win32 the group exists only in the virtual tree - it has no native handle. The radios are created as
+C<BS_AUTORADIOBUTTON> children (first one carrying C<WS_GROUP>), and the driver keeps a C<radio_group> registry entry
+with C<hwnd =E<gt> undef> so C<set_prop> can route a C<value> change into C<BM_SETCHECK> on each radio child.
+
+Because C<children> is memoized, the reconciler diffs I<the same child objects> every render and transfers their ids -
+which is exactly why the native radios keep stable handles even as the selection moves around.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji::Node::Radio> - the child buttons this group builds
+
+=item * L<Uji::Node::Checkbox> - the non-exclusive toggle
+
+=item * L<Uji::Node::Column> - the layout the group imitates
+
+=item * L<Uji> - entry point (exports C<radio_group>)
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+BS_AUTORADIOBUTTON WS_GROUP set_prop BM_SETCHECK hashref memoizing recomposed hwnd
+
+=end stopwords
+
+=cut

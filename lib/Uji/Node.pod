@@ -1,0 +1,225 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node - the base virtual-node class
+
+=head1 SYNOPSIS
+
+    use Uji;
+    use Uji::Node;
+
+    # Nodes are plain data records; you rarely construct one directly.
+    my $node = Uji::Node->new(
+        flex    => 1,
+        enabled => 0,
+        visible => 0,
+        tooltip => 'This is off'
+    );
+
+    # After a layout pass the computed bounds are available:
+    my ( $x, $y, $w, $h ) = ( $node->bx, $node->by, $node->bw, $node->bh );
+
+=head1 DESCRIPTION
+
+L<Uji::Node> is the base class for every widget in a virtual tree. A node is a B<plain data record>: it holds the
+requested geometry, the common widget state, a stable id, and - after a layout pass - the computed bounds. It has no
+native handle and no OS state; converting a tree of these records into living controls is the
+L<Uji::Driver|Uji::Driver>'s job.
+
+Because nodes are pure Perl, the entire render cycle can run headless: layout, diffing, and even the "native" side can
+be exercised with no window at all (see C<t/lib/MockDriver.pm>).
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally never call C<new> directly. The L<Uji|Uji/FUNCTIONS> helpers are thin constructors: each returns an
+instance of the matching subclass (L<Uji::Node::Text|Uji::Node::Text>, L<Uji::Node::Button|Uji::Node::Button>, ...).
+Every parameter is inherited by every widget.
+
+=head3 Parameters
+
+=head4 C<id>
+
+A stable identifier. Auto-generated as C<'101'>, C<'102'>, ... by a process-local counter; you normally let the
+reconciler manage it.
+
+=head4 C<x>, C<y>, C<w>, C<h>
+
+Requested position and size. Default C<0> each. These are I<inputs> to the layout engine; after layout the computed
+values live in C<bx>/C<by>/C<bw>/C<bh> (below). Tip: in containers, prefer C<flex> over manual sizing.
+
+=head4 C<flex>
+
+A proportionality hint for flex containers. C<0> (default) means natural size; C<E<gt> 0> means "take a share of the
+remaining free space". In a row, two children with C<flex E<gt> 2> and C<flex E<gt> 1> split the leftover width 2:1.
+Since the fit-policy rework, C<flex> also grows a leaf along its container's I<main> axis (e.g. a button that
+fills the leftover height of a column).
+
+=head4 C<fit>, C<fit_w>, C<fit_h>
+
+Per-axis fit policy, i.e. how the node sizes against its parent's cell. C<fit> sets both axes; C<fit_w>/C<fit_h>
+override it per axis. A numeric C<w>/C<h> is always C<fixed> regardless of the policy. Values:
+
+=over
+
+=item C<'fill'> (alias C<'stretch'>) -- use the parent's cell on that axis. On a container's I<main> axis this
+consumes the leftover space (like C<flex>); on the I<cross> axis it spans the cell edge to edge.
+
+=item C<'content'> (aliases C<'fit'>, C<'shrink'>) -- shrink to the node's natural (measured) size on that axis,
+instead of stretching across the cell.
+
+=item C<'fixed'> -- use the numeric C<w>/C<h> exactly (equivalent to just setting C<w>/C<h>).
+
+=back
+
+Defaults: an unset policy keeps today's behaviour -- the width fills the cell unless C<w> is set, and the height is
+intrinsic for leaves / the cell for structural containers. A common recipe is a column of labels that hug their
+text:
+
+    Uji::column( children => [
+        Uji::button( label => 'Hug me', fit => 'content' ),  # intrinsic width, left-aligned
+        Uji::text_input( flex => 1 ),                        # grows to fill the leftover height
+        Uji::text( 'wide', fit_w => 'content', min_w => 120 ),
+    ] );
+
+=head4 C<min_w>, C<min_h>, C<max_w>, C<max_h>
+
+Size constraints (C<0> = unconstrained, the default). Every node can carry them; the layout clamps the computed
+box on each axis, and a container's natural size honours the constraints of its children (they plumb up/down the
+tree). On a C<Window> they still drive the native drag-track clamp and maximise refusal as before.
+
+=head4 C<align_w>, C<align_h>
+
+Cross-axis alignment of the node inside its parent's cell: C<'start'> (default), C<'center'>, C<'end'>, or
+C<'stretch'>. It only has an effect when the node is smaller than its cell on that axis, i.e. when its fit policy
+(or an explicit size) leaves free space. C<align_w> applies inside a vertical stack (C<Column>, C<GroupBox>) and
+C<align_h> inside a C<Row>; C<'stretch'> fills the cell edge to edge (like C<fit =E<gt> 'fill'>). These are
+separate from C<Text>/C<StatusText>'s own C<align> prop, which controls the horizontal alignment of the text
+I<within> the label.
+
+    Uji::column( children => [
+        Uji::text( 'Centered', fit => 'content', align_w => 'center' ),
+        Uji::row( children => [
+            Uji::button( label => 'OK', fit_w => 'content', align_h => 'center' ),
+        ] ),
+    ] );
+
+=head4 C<enabled>
+
+C<1> to accept input (default), C<0> to grey it out. Recomposed live whenever the model changes it.
+
+=head4 C<visible>
+
+C<1> to show (default), C<0> to hide and release its layout space. Recomposed live.
+
+=head4 C<tooltip>
+
+A short string shown on hover. Default C<undef> (no tooltip). Recomposed live.
+
+=head4 C<color>
+
+Foreground text colour as a C<'#RRGGBB'> string. Default C<undef> (system default). Recomposed live; the native control
+is repainted after the colour changes. Ignored on nodes that have no text (spinners, progress bars).
+
+=head4 C<background>
+
+Background fill colour as a C<'#RRGGBB'> string. Default C<undef> (system default). Recomposed live; the native control
+is repainted after the colour changes.
+
+=head4 C<font>
+
+Font family name (e.g. C<'Consolas'>, C<'Courier New'>). Default C<undef> (the system default GUI font, typically C<MS
+Shell Dlg>). Recomposed live (requires C<recreate_node>; see L<Uji::Reconciler/Recreation>).
+
+=head4 C<font_size>
+
+Point size of the font. Default C<undef> (the system default, roughly 9 pt). Recomposed live (requires
+C<recreate_node>; see L<Uji::Reconciler/Recreation>).
+
+=head4 C<type>
+
+Read-only. The widget's type tag as a plain string: C<'text'>, C<'button'>, C<'slider'>, C<'radio_group'>, and so on.
+Subclasses override the C<_type> method to set it.
+
+=head1 COMMON PARAMETERS
+
+Every widget accepts the parameters documented under L</Parameters>: C<id>, C<x>/C<y>/C<w>/C<h>, C<flex>, C<fit>/C<fit_w>/C<fit_h>,
+C<min_w>/C<min_h>/C<max_w>/C<max_h>, C<align_w>/C<align_h>, C<enabled>,
+C<visible>, C<tooltip>, C<color>, C<background>, C<font>, C<font_size>, and the C<type> tag. Subclass docs refer back
+here for them.
+
+=head1 Methods
+
+=head2 C<bx>, C<by>, C<bw>, C<bh>
+
+Computed bounds, written by L<Uji::Layout|Uji::Layout> during C<compute>. Parent-relative x/y and the resulting
+width/height. C<0> until the first layout pass.
+
+=head2 C<set_bounds ( $x, $y, $w, $h )>
+
+Writes the computed bounds readers. Called by the layout engine and by the driver when a window's client size is
+measured. Not a param: it is I<always> derived from the layout pass so a render never re-reads stale requested
+geometry.
+
+=head2 C<children>
+
+Returns the array reference of child nodes. The base class has none and returns C<[]>; containers override it
+(L<Uji::Node::Column|Uji::Node::Column>, L<Uji::Node::Row|Uji::Node::Row>, L<Uji::Node::Window|Uji::Node::Window>, and
+L<Uji::Node::RadioGroup|Uji::Node::RadioGroup>).
+
+=head1 The Three-Layer Property Pattern
+
+Every live widget property follows the same three-step route so the model stays the single source of truth:
+
+=over
+
+=item 1. A C<field $prop : param : reader> on the node class.
+
+=item 2. A C<can('prop')> diff in L<Uji::Reconciler|Uji::Reconciler>'s C<patch>, which calls C<set_prop> when the
+value changed.
+
+=item 3. A branch in the platform driver's C<set_prop> that applies the value to the native control.
+
+=back
+
+See L<Uji|Uji/Lifecycle of a Property> for the full discussion.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - the toolkit entry point (exports one constructor per node type)
+
+=item * L<Uji::Layout> - computes C<bx>/<by>/<bw>/<bh>
+
+=item * L<Uji::Reconciler> - diffs nodes and drives C<set_prop>
+
+=item * L<Uji::App> - the runtime that ties the tree to a driver
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+flex bx by bw bh hashref pos testbed recomposed RRGGBB Consolas Courier New
+
+=end stopwords
+
+=cut

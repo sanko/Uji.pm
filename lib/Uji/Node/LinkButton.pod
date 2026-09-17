@@ -1,0 +1,110 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::LinkButton - an edge-less, hyperlink-style click target
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    # Fire a static message when "clicked".
+    Uji::link_button( label => 'Visit docs', on_click => { type => 'OPEN_DOCS' } );
+
+    # Or a callback that computes the message at click time.
+    Uji::link_button(
+        label    => 'Open ' . $model->{fname},
+        on_click => sub { { type => 'OPEN_FILE', value => $model->{fname} } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::LinkButton> is a push button without the raised edge: it reads as embedded text but still is a real click
+target. Use it for in-content actions - opening documentation, loading a file, revealing a detail - where a plain
+C<button> would look too heavy.
+
+A link button is B<stateless from the model's point of view>: it has no I<value>. Everything it does is carried by
+L</on_click>, exactly as with L<Uji::Node::Button|Uji::Node::Button>.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/link_button> helper:
+
+    Uji::link_button( label => 'Reset', flex => 1, on_click => { type => 'RESET' } );
+
+=head3 Parameters
+
+=head4 C<label>
+
+The text shown (with an underline in the default font). Default C<''>.
+
+=head4 C<on_click>
+
+A static message hashref, sent verbatim when the button is clicked, or a callback C<sub { ... }> whose return value (a
+message hashref, or C<undef> to ignore the click) is sent instead. See L<Uji|Uji/Messages>.
+
+=head3 Inherited Parameters
+
+C<Uji::Node::LinkButton> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, and C<id>.
+
+=head1 Methods
+
+=head2 C<label>
+
+Returns the link text.
+
+=head2 C<on_click>
+
+Returns the message hashref (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'link_button'>.
+
+=head1 How it Works
+
+On Win32 a link button is a child C<BUTTON> control with the same C<WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS |
+BS_PUSHBUTTON> style set as a normal button plus C<BS_FLAT> - which strips the raised frame for the "link" look
+without giving up the click feedback or the C<BN_CLICKED> notification. Clicks post C<WM_COMMAND> to the parent; the
+driver looks the control up by id and C<put>s the L</on_click> message onto the channel, identical to L<Uji::Node::Button>.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - the toolkit entry point (exports C<link_button>)
+
+=item * L<Uji::Node::Button> - the raised push button
+
+=item * L<Uji::Node::Text> - pure display text (no interaction)
+
+=item * L<Uji::Node> - the base node class and shared parameters
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+hashref BS_FLAT BS_PUSHBUTTON stateless in-content
+
+=end stopwords
+
+=cut

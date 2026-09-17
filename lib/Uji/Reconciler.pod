@@ -1,0 +1,150 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Reconciler - the VDOM diffing and patching engine
+
+=head1 SYNOPSIS
+
+    my $reconciler = Uji::Reconciler->new;
+
+    # After a render, patch the old tree into the new one via the driver.
+    $reconciler->patch( $old_vtree, $new_vtree, $driver );
+
+=head1 DESCRIPTION
+
+L<Uji::Reconciler> diffs two virtual trees - the previous render and the new one - and turns the differences into the
+smallest set of native updates, issued through a L<Uji::Driver|Uji::Driver::Win32> (or a mock). It is the heart of the
+"recompute everything, update only what changed" model.
+
+Two properties make this cheap and safe:
+
+=over
+
+=item * B<Identity transfer>. Before diffing, C<patch> copies the I<old> node's C<id> onto the new node at the same
+position. Native handles are keyed by id, so a moved/resized/text-changed widget keeps its handle; only what truly
+changed is touched.
+
+=item * B<Property-by-property comparison>. Each diffable property is compared old-vs-new and C<set_prop> is issued
+only on change, so a re-render never disturbs controls whose value is unchanged.
+
+=back
+
+=head1 Constructor
+
+=head2 C<new ()>
+
+No parameters. The L<Uji|Uji/app> helper constructs one for you by default.
+
+=head1 Methods
+
+=head2 C<patch ( $old_node, $new_node, $driver )>
+
+Recursively reconciles the subtree rooted at C<$new_node> against C<$old_node>. The diff rules, in order:
+
+=over
+
+=item * C<id>: transferred from old to new; the registry is refreshed via C<update_registry>.
+
+=item * C<title> (window) and C<label> (widgets) - issued when the strings differ.
+
+=item * C<value> - for text inputs and sliders. Skipped here for C<radio_group> (see the last rule).
+
+=item * C<min>, C<max>, C<step> - slider geometry, issued when changed.
+
+=item * C<enabled>, C<visible>, C<focused>, C<tooltip> - common live state.
+
+=item * C<checked> (checkbox), C<readonly>, C<maxlength> (edits).
+
+=item * C<placeholder> (edits) - pushed as C<EM_SETCUEBANNER>.
+
+=item * C<password_char> (password) - pushed as C<EM_SETPASSWORDCHAR>.
+
+=item * C<color> / C<background> (any widget) - pushed as C<set_prop> and the control is repainted via C<WM_CTLCOLOR*>.
+
+=item * C<font> / C<font_size> (any widget) - pushed as a new C<WM_SETFONT>.
+
+=item * Window state: C<topmost>, C<minimized>, C<maximized>, and the C<min_w>/C<min_h>/C<max_w>/C<max_h> track limits.
+
+=item * B<bounds> - if any of C<bx>/C<by>/C<bw>/C<bh> changed, C<move_widget> is issued (the window root itself is
+skipped: the OS manages its size).
+
+=item * C<children> - patched pairwise by index.
+
+=item * C<radio_group> C<value> - diffed I<after> the child loop so the radio children carry their transferred,
+stable ids before the driver routes the check-state update to them.
+
+=back
+
+=head1 Recreation
+
+Two properties cannot be changed in place on a live native control: they are baked into the window style at creation
+time. Changing them therefore destroys the control and recreates it from scratch - a B<recreation> rather than a
+B<patch>. The node's C<id> is transferred to the new native handle so the registry and any event bindings keep working.
+
+The mount-only properties (checked per-node via C<_mount_only_props>) and how each is replayed from the fresh
+parameters:
+
+=over
+
+=item * C<multiline> (L<Uji::Node::TextInput|Uji::Node::TextInput>, L<Uji::Node::MultilineText|Uji::Node::MultilineText>)
+
+=item * C<orientation> (L<Uji::Node::Slider|Uji::Node::Slider>)
+
+=item * C<align> (L<Uji::Node::Text|Uji::Node::Text>)
+
+=item * C<label> on recreated L<Uji::Node::Text> nodes - the new STATIC is created with fresh text.
+
+=back
+
+Recreation is issued once per node per render when at least one mount-only prop changed; the driver re-creates the
+native control, re-applies every style-affecting parameter, and repaints. See L<Uji::Driver::Win32/recreate_node>.
+
+=head1 How it Works
+
+The reconciler relies on the L<Uji::Node|Uji::Node/The Three-Layer Property Pattern> contract: a node exposes a field
+and the driver implements the matching branch in C<set_prop>. Adding a new live property means adding all three pieces
+- see L<Uji|Uji/Lifecycle of a Property>.
+
+Because the whole pass is pure tree-arithmetic, the identical reconciler drives the real Win32 driver and the mock
+driver in C<t/lib/MockDriver.pm>; tests can assert the exact sequence of C<set_prop>/C<move_widget> calls that a render
+produces.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - step 7 of The Message Round-Trip, Annotated is this module
+
+=item * L<Uji::Node> - the nodes being diffed
+
+=item * L<Uji::Driver> - the mutation surface C<patch> targets
+
+=item * L<Uji::App> - calls C<patch> after every render batch
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+VDOM diffing set_prop move_widget registry radio_group patch headless mount-only recreate_node mountonly
+EM_SETCUEBANNER EM_SETPASSWORDCHAR WM_SETFONT WM_CTLCOLOR
+
+=end stopwords
+
+=cut

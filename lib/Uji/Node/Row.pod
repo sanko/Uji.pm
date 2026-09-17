@@ -1,0 +1,117 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Row - a horizontal flex container
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::row(
+        spacing  => 10,
+        children => [
+            Uji::button( label => '+1',    flex => 2, on_click => { type => 'INCREMENT' } ),
+            Uji::button( label => 'Reset', flex => 1, on_click => { type => 'RESET' } )
+        ]
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::Row> lays its children out left-to-right. Like L<Uji::Node::Column|Uji::Node::Column> it is a pure layout
+container - no native control, no model state. Its distinguishing feature is distributing horizontal free space via
+C<flex>.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/row> helper.
+
+=head3 Parameters
+
+=head4 C<children>
+
+Array reference of child nodes, laid out left-to-right. Default C<[]>.
+
+=head4 C<padding>
+
+Space between the row's edge and its children. Default C<0> (a row rarely needs one).
+
+=head4 C<spacing>
+
+Gap between consecutive children. Default C<10>.
+
+=head3 Inherited Parameters
+
+Inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>, including C<flex> (a row itself can flex inside
+its parent), C<visible>, C<id>, C<x>/C<y>/C<w>/C<h>.
+
+=head1 Methods
+
+=head2 C<children>
+
+Returns the child array reference.
+
+=head2 C<padding>, C<spacing>
+
+Return the container parameters.
+
+=head2 C<type>
+
+Returns the string C<'row'>.
+
+=head1 How it Works
+
+A row is laid out by L<Uji::Layout|Uji::Layout/_layout_flex> along the horizontal axis:
+
+=over
+
+=item 1. Padding is removed from the edges, spacing from the interior.
+
+=item 2. Children with C<flex =E<gt> 0> take their natural/requested width.
+
+=item 3. Remaining free space is split proportionally among children with C<flex E<gt> 0>.
+
+=item 4. Every child is stretched to the full inner height.
+
+=back
+
+The container itself has no native handle; its children are created as siblings of it by the L<Win32
+driver|Uji::Driver::Win32/mount_children>.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji::Node::Column> - the vertical twin
+
+=item * L<Uji::Layout> - the engine that computes these bounds
+
+=item * L<Uji> - entry point (exports C<row>)
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+flex padding spacing hashref recomposed
+
+=end stopwords
+
+=cut

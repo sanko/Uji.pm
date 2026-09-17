@@ -1,0 +1,131 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Sub - subscriptions (time and platform events) for the TEA runtime
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::app(
+        init          => \&init,
+        update        => \&update,
+        view          => \&view,
+        subscriptions => sub ($model) {
+            return [
+                Uji::sub_interval( 1000, { type => 'TICK' } ),
+                Uji::sub_on_resize( { type => 'WINDOW_RESIZED' } ),
+            ];
+        }
+    )->run;
+
+=head1 DESCRIPTION
+
+A B<subscription> is a declarative statement that the application wants to
+receive messages from an external source. You never start or stop anything
+yourself; on every render the runtime asks your C<subscriptions> callback what
+the current model needs, starts whatever is new, and stops whatever is no
+longer requested.
+
+Two sources ship today:
+
+=over
+
+=item * an interval timer (L</sub_interval>), and
+
+=item * the window resize event (L</sub_on_resize>).
+
+=back
+
+This is the L<Elm Architecture|Uji/"An Introduction to The Elm Architecture">
+answer to background work: instead of mutating state from a thread, you
+describe the message you would like to receive, and it arrives through the same
+C<update> path as a click.
+
+=head1 FUNCTIONS
+
+Both functions are exported by default from L<Uji>, so you can call them as
+C<sub_interval(...)> or C<Uji::sub_interval(...)>.
+
+=head2 C<sub_interval ( $ms, $msg, %opts )>
+
+Requests a message every C<$ms> milliseconds. C<$ms> is rounded up to a
+minimum of 1.
+
+C<$msg> is either a message hashref:
+
+    Uji::sub_interval( 1000, { type => 'TICK' } );
+
+or a coderef that is called with the current time (in milliseconds) and returns
+a message:
+
+    Uji::sub_interval( 1000, sub ($now) { { type => 'TICK', at => $now } } );
+
+Return C<undef> from the coderef to skip an individual tick.
+
+The timer is B<periodic from a fixed phase>: it keeps its schedule across
+renders, so a busy render loop can never starve it. When the subscription is
+removed the timer simply stops.
+
+Timers keep firing - and the view keeps redrawing - while the user drags or
+resizes the window frame. Those gestures put Windows into its own modal loop
+that suspends the runtime's fibers; the driver arms a `WM_TIMER` for the drag
+and drives a synchronous pump, so the UI no longer freezes and then snaps on
+release.
+
+=head2 C<sub_on_resize ( $msg, %opts )>
+
+Requests C<$msg> whenever the window changes size. C<$msg> takes the same two
+shapes as L</sub_interval>, though the coderef's argument is of little use here.
+
+    Uji::sub_on_resize( { type => 'WINDOW_RESIZED' } );
+
+The runtime translates the platform's reserved C<RESIZE> event into these
+messages, so C<update> only ever sees your message - never the raw event.
+
+=head1 Subscription Identity
+
+Subscriptions are matched between renders by a B<key> derived from their kind,
+period, optional C<id>, and - when the message is plain data - the message
+itself. Two structurally identical subscriptions therefore collapse into one;
+removing the last one stops the timer. Because a coderef has no stable
+identity, two coderef messages with the same period are treated as the same
+subscription. Pass an explicit C<id> to keep them apart:
+
+    Uji::sub_interval( 1000, sub { { type => 'A' } }, id => 'a' );
+    Uji::sub_interval( 1000, sub { { type => 'B' } }, id => 'b' );
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji::App> - hosts the C<subscriptions> callback and drives the timers
+
+=item * L<Uji> - the Elm Architecture introduction and the C<on_*> event messages
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+hashref coderef undef
+
+=end stopwords
+
+=cut

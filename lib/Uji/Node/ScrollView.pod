@@ -1,0 +1,142 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::ScrollView - a viewport that scrolls a single content subtree
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    my $log = Uji::column(
+        spacing  => 6,
+        padding  => 6,
+        children => [ map { Uji::text("Line $_") } 1 .. 30 ],
+    );
+
+    Uji::scroll_view(
+        $log,
+        orientation => 'vertical',
+        on_scroll   => sub ($x, $y) { { type => 'SCROLLED', x => $x, y => $y } },
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::ScrollView> clips its single C<child> subtree to a viewport and exposes native scrollbars when the content
+overflows. Content is exact WYSIWYG layout: the subtree is laid out at its natural size and the view moves it inside
+the clipped window, so a picture at pixel (1000, 500) scrolls to but never wraps or shrinks. A native scrollbar appears
+on each offending axis (C<vertical>, C<horizontal>, or C<both>).
+
+=head1 Constructor
+
+=head2 C<new ( $child, %params )>
+
+You normally use the L<Uji|Uji/scroll_view> helper, which passes its first argument as C<child>.
+
+=head3 Parameters
+
+=head4 C<child>
+
+The single subtree to scroll (a column, row, group box, or a bare leaf). Recomposed live: only changes to the content's
+natural size re-drive the scrollbars.
+
+=head4 C<orientation>
+
+C<'vertical'> (default), C<'horizontal'>, or C<'both'>. Fixed at mount time (requires C<recreate_node>; see
+L<Uji::Reconciler/Recreation>).
+
+=head4 C<scroll_x> / C<scroll_y>
+
+The initial scroll offsets in pixels (both default C<0>). Recomposed live through C<set_prop>; offsets outside the
+content range are clamped.
+
+=head4 C<on_scroll>
+
+A callback receiving C<($x, $y)>, the current offsets:
+
+    on_scroll => sub ($x, $y) { { type => 'SCROLLED', x => $x, y => $y } }
+
+Return a message hashref (or C<undef>). It fires whenever the thumb is track-dragged or line/page-scrolled.
+
+=head3 Inherited Parameters
+
+L<Uji::Node::ScrollView> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, C<color>, C<background>, C<font>, C<font_size>, and C<id>. With no main
+size a scroll_view is a FILL child and takes the leftover space of its container.
+
+=head1 Methods
+
+=head2 C<child>
+
+Returns the scrolled subtree (or C<undef>).
+
+=head2 C<orientation>
+
+Returns C<'vertical'>, C<'horizontal'>, or C<'both'>.
+
+=head2 C<scroll_x>, C<scroll_y>
+
+Return the current offsets.
+
+=head2 C<on_scroll>
+
+Returns the callback (or C<undef>).
+
+=head2 C<children>
+
+Returns a single-element listref of the C<child> (or an empty listref).
+
+=head2 C<type>
+
+Returns the string C<'scroll_view'>.
+
+=head1 How it Works
+
+On Win32 a scroll_view mounts a dedicated viewport window (C<UjiViewportClass>, registered once at driver construction,
+with C<WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN>) and creates the content subtree inside it. Each created content record
+shares the viewport's scroll store; positioning a record moves it relative to the viewport origin. A native
+C<SCROLLBAR> control is placed on each overflowing axis; window messages C<WM_VSCROLL>/C<WM_HSCROLL> arrive with the
+bar's handle in C<lParam> and are mapped back to the scroll_view. Range and thumb position are maintained with
+C<SetScrollInfo>/C<GetScrollInfo> (C<SB_CTL>) because the SBM_* window messages are unreliable for this control on
+modern Windows.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<scroll_view>)
+
+=item * L<Uji::App> - the second layout pass that sizes a FILL scroll_view
+
+=item * L<Uji::Layout> - _layout_scroll_view measurement
+
+=item * L<Uji::Node> - base class and the three-layer property pattern
+
+=item * L<Uji::Driver::Win32> - viewport, scroll store, and WM_VSCROLL routing
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+UjiViewportClass SCROLLBAR SetScrollInfo GetScrollInfo SB_CTL SBM_* WM_HSCROLL WM_VSCROLL WS_CHILD WS_VISIBLE
+WS_CLIPCHILDREN recreate_node recomposed clamps track-dragged orientation
+
+=end stopwords
+
+=cut

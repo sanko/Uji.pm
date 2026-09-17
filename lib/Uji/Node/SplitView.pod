@@ -1,0 +1,161 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::SplitView - a resizable two-pane split
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::split_view(
+        Uji::column(
+            spacing  => 6,
+            children => [ Uji::text('File'), Uji::button( label => 'Open', on_click => { type => 'OPEN' } ) ]
+        ),
+        Uji::scroll_view(
+            Uji::multiline_text( value => $model->{body}, on_input => sub ($t) { { type => 'SET_BODY', value => $t } } )
+        ),
+        orientation => 'horizontal',    # panes side by side; 'vertical' stacks them (default)
+        divider     => 260,             # px from the container's leading edge; undef = centered
+        on_divider  => sub ($pos) { { type => 'SET_DIVIDER', value => $pos } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::SplitView> divides its space between exactly two panes with a draggable divider strip between them. Pane A
+and B are the two C<children>. Along the main axis (height for C<vertical>, width for C<horizontal>) pane A gets the
+C<divider> offset, then a C<divider_w>-pixel drag handle, then pane B takes the remainder. A horizontal split puts
+panes side by side; a vertical split stacks them.
+
+The divider position lives in the model: C<divider> is the offset in pixels (C<undef> centers the split), and dragging
+the handle fires C<on_divider> so the model can store the new position and re-render it. The two panes are clamped to
+at least C<min_a>/C<min_b> px along the main axis, so one pane can never swallow the other.
+
+=head1 Constructor
+
+=head2 C<new ( $a, $b, %params )>
+
+The L<Uji|Uji/split_view> helper takes the two panes positionally; the underlying constructor takes them as C<children>.
+
+=head3 Parameters
+
+=head4 C<children>
+
+An arrayref of exactly two pane subtrees (the split's A and B).
+
+=head4 C<orientation>
+
+C<'vertical'> (default) stacks panes A/B top-to-bottom; C<'horizontal'> places them left-to-right. Fixed at mount time
+(requires C<recreate_node>; see L<Uji::Reconciler/Recreation>).
+
+=head4 C<divider>
+
+The divider offset in px along the main axis: pane A's main extent. C<undef> (default) centers the split. Recomposed
+live; the value is clamped into C<min_a>..C<max_b> by the driver.
+
+=head4 C<divider_w>
+
+The drag-handle thickness in px. Default C<6>.
+
+=head4 C<min_a> / C<min_b>
+
+The minimum main-axis extent (px) of each pane. Defaults C<40>. Enforced by the clamp whenever the divider moves or the
+track resizes; when the container is too small for both minima, the shared clamp keeps pane A at its minimum and lets
+pane B shrink.
+
+=head4 C<on_divider>
+
+A callback receiving the clamped divider position after a drag:
+
+    on_divider => sub ($pos) { { type => 'SET_DIVIDER', value => $pos } }
+
+Return a message hashref (or C<undef> to ignore the event). Fires continuously while the handle is dragged.
+
+=head3 Inherited Parameters
+
+L<Uji::Node::SplitView> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, and C<id>. A split_view with no main size is a FILL child and takes the
+leftover space of its container (its panes would otherwise collapse).
+
+=head1 Methods
+
+=head2 C<children>
+
+Returns the arrayref of the two pane subtrees.
+
+=head2 C<orientation>
+
+Returns C<'vertical'> or C<'horizontal'>.
+
+=head2 C<divider>
+
+Returns the requested divider offset (or C<undef> when centered).
+
+=head2 C<divider_w>
+
+Returns the drag-handle thickness.
+
+=head2 C<min_a> / C<min_b>
+
+Return the pane minima.
+
+=head2 C<on_divider>
+
+Returns the divider callback (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'split_view'>.
+
+=head1 How it Works
+
+A split_view has no native window of its own: on Win32 the two panes mount as siblings of the app window (group-box
+style), positioned into the pane rects Layout computes - pane A fills C<[0 .. divider]>, a C<divider_w> gap, then pane
+B the remainder along the main axis. The drag handle is a plain child window registered from a dedicated class whose
+brush paints the strip. The platform driver is the single source for the divider position: it clamps the model's
+C<divider> (and re-applies the stored ratio when the track size changes, e.g. window resize) and keeps the live drag
+position in its registry, so Layout, the drag handler, and the first placement all agree. C<WM_LBUTTONDOWN> on the
+strip begins mouse capture, each C<WM_MOUSEMOVE> while captured recomputes the position from the real cursor, moves
+the strip immediately, and fires C<on_divider>; C<WM_LBUTTONUP> ends it. The sizer cursor is chosen per orientation
+(C<IDC_SIZEWE> for a horizontal split, C<IDC_SIZENS> for vertical).
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - the toolkit entry point (exports C<split_view>)
+
+=item * L<Uji::Node::ScrollView> - the scrolling viewport sibling
+
+=item * L<Uji::Node::Column>, L<Uji::Node::Row> - fixed and flex containers
+
+=item * L<Uji::Node> - the base node class and shared parameters
+
+=item * L<Uji::Layout>, L<Uji::Driver::Win32> - pane rects and the divider drag
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+IDC_SIZEWE IDC_SIZENS WM_LBUTTONDOWN WM_LBUTTONUP WM_MOUSEMOVE hashref clamp
+
+=end stopwords
+
+=cut

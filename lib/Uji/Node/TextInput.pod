@@ -1,0 +1,151 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::TextInput - a single-line (or multi-line) text editor
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::text_input(
+        value    => $model->{name},
+        readonly => $model->{locked},
+        focused  => 1,
+        maxlength => 20,
+        on_input => sub ($text) { { type => 'SET_NAME', value => $text } }
+    );
+
+    # A multi-line editor (or use the dedicated Uji::multiline_text helper):
+    Uji::text_input(
+        value      => $model->{body},
+        multiline  => 1,
+        on_input   => sub ($text) { { type => 'SET_BODY', value => $text } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::TextInput> is an editable text field. It is a B<two-way> widget: the model supplies C<value>, and every
+keystroke fires L</on_input> so the model can adopt the new text - the classic Elm loop. Because the model is the
+reference, the reconciler only pushes text to the control when it actually differs (which also keeps the caret from
+jumping on every render).
+
+With C<multiline> left off it is a single-line editor; set C<multiline => 1> and the same widget becomes a scrolling
+multi-line text area.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/text_input> helper.
+
+=head3 Parameters
+
+=head4 C<value>
+
+The editor's text. Default C<''>. Recomposed live by the reconciler.
+
+=head4 C<on_input>
+
+A callback receiving the I<full current text> of the control whenever the user edits it:
+
+    on_input => sub ($text) { { type => 'SET_NAME', value => $text } }
+
+Return a message hashref (or C<undef> to ignore the event). The text is read from the native control at event time, so
+the message always carries what the user actually typed.
+
+=head4 C<readonly>
+
+C<1> to prevent editing while still selectable/copyable. Default C<0>. Recomposed live.
+
+=head4 C<maxlength>
+
+Maximum number of characters. C<0> (default) = unlimited. Recomposed live.
+
+=head4 C<focused>
+
+C<1> to grab keyboard focus at mount and on change. Default C<0>. Recomposed live.
+
+=head4 C<multiline>
+
+C<0> (default) renders a single-line editor that scrolls horizontally; C<1> renders a multi-line text area with a
+vertical scrollbar. Recomposed live (requires C<recreate_node>; see L<Uji::Reconciler/Recreation>).
+
+=head4 C<placeholder>
+
+A faint grey hint shown while the control is empty (ignored once the user types). Default C<undef> (no hint).
+Recomposed live.
+
+=head3 Inherited Parameters
+
+L<Uji::Node::TextInput> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, C<color>, C<background>, C<font>, C<font_size>, and C<id>.
+
+=head1 Methods
+
+=head2 C<value>
+
+Returns the current text value.
+
+=head2 C<on_input>
+
+Returns the callback (or C<undef>).
+
+=head2 C<readonly>, C<maxlength>, C<focused>, C<multiline>
+
+Return the current parameter values. C<placeholder> returns the hint string (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'text_input'>.
+
+=head1 How it Works
+
+On Win32 this is an C<EDIT> control (C<WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL>). With C<multiline> it
+becomes C<WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | WS_TABSTOP | ES_MULTILINE | ES_AUTOVSCROLL>. User editing
+posts C<WM_COMMAND> with C<EN_CHANGE>; the driver reads the text back and calls C<on_input>. Programmatic updates use
+C<SetWindowTextW> wrapped in a suppression flag so the native C<EN_CHANGE> produced by the API call does not echo back
+into the model. After a programmatic set, the caret is moved to the end (C<EM_SETSEL>) because C<SetWindowTextW>
+otherwise snaps it to position 0.
+
+A placeholder is drawn by the driver with grey text only while the native text is empty, and disappears on the first
+real keystroke.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<text_input>)
+
+=item * L<Uji::Node::MultilineText> - the always-multi-line flavour
+
+=item * L<Uji::Node::Password> - the masked subclass of this widget
+
+=item * L<Uji::Node> - base class and the three-layer property pattern
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+EDIT ES_AUTOHSCROLL WS_CHILD WS_VISIBLE WS_BORDER EN_CHANGE SetWindowTextW EM_SETSEL recomposed exercisable flex
+maxlength readonly multiline placeholder recreate_node
+
+=end stopwords
+
+=cut

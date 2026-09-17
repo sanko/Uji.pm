@@ -1,0 +1,99 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::StatusBar - a bottom status bar with one or more proportional panes
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::status_bar(
+        panels => [ 'Hull integrity OK', $model->{answers} . ' answers', 'v1.0' ],
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::StatusBar> renders a status bar at the bottom of a window. With a single pane a C<label> is enough; pass
+C<panels> as an arrayref of pane texts and the bar splits into proportional panes (right-aligned text). Both properties
+are recomposed live: the driver re-parts the control and repaints the panes through C<SB_SETPARTS> / C<SB_SETTEXT>.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/status_bar> helper.
+
+=head3 Parameters
+
+=head4 C<label>
+
+The single-pane text (pane 0). Default C<''>. Recomposed live.
+
+=head4 C<panels>
+
+An arrayref of pane texts. When non-empty it overrides C<label>: the bar renders one pane per entry, splitting the
+width proportionally. Recomposed live.
+
+=head3 Inherited Parameters
+
+L<Uji::Node::StatusBar> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, C<color>, C<background>, C<font>, C<font_size>, and C<id>.
+
+=head1 Methods
+
+=head2 C<label>
+
+Returns the single-pane text.
+
+=head2 C<panels>
+
+Returns the pane-text arrayref (possibly empty).
+
+=head2 C<type>
+
+Returns the string C<'status_bar'>.
+
+=head1 How it Works
+
+On Win32 this is a C<msctls_statusbar32> control (C<WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP>) registered with
+C<InitCommonControlsEx> at driver construction. Panes are created with C<SB_SETPARTS>: the driver derives one
+proportional part edge per pane from the node width, so two panes split the bar in half (SB_SETPARTS ignores the part
+widths and splits edges evenly). Text per pane goes through C<SB_SETTEXT> (the control copies the buffer, so it is
+freed immediately).
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<status_bar>)
+
+=item * L<Uji::Node> - base class and the three-layer property pattern
+
+=item * L<Uji::Driver::Win32> - SB_* plumbing
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+SB_SETPARTS SB_SETTEXT SBARS_SIZEGRIP msctls_statusbar32 InitCommonControlsEx WS_CHILD WS_VISIBLE recomposed
+
+=end stopwords
+
+=cut

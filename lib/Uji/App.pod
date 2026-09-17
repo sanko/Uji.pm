@@ -1,0 +1,197 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::App - the TEA runtime (fibers, message channel, render loop)
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::app(
+        init   => \&init,
+        update => \&update,
+        view   => \&view
+    )->run;
+
+=head1 DESCRIPTION
+
+L<Uji::App> is the application runtime. It owns the model, the virtual tree, the message channel, and the two
+cooperative fibers that drive the loop: one pumps platform events, the other folds messages through C<update> and
+re-renders. It is constructed by the L<Uji|Uji/app> helper; you never need to construct it yourself.
+
+=head1 Constructor
+
+=head2 C<new ( %args )>
+
+The L<Uji|Uji/app> helper creates the app with three required callbacks and wires sensible defaults for everything
+else.
+
+    Uji::app(
+        init   => \&init,      # required
+        update => \&update,    # required
+        view   => \&view      # required
+    );
+
+=head3 Parameters
+
+=head4 C<init>
+
+C<< sub () { ($model, $cmd) } >>. Runs once at boot and returns the starting model and any initial command. The C<$cmd>
+half is reserved for background side-effects; return C<undef> until that lands.
+
+=head4 C<update>
+
+C<< sub ($msg, $model) { ($new_model, $cmd) } >>. Folds each message into the next model. The model is the single
+source of truth; see L<Uji|Uji/Write Your update() As a Pure Function> for advice.
+
+=head4 C<view>
+
+C<< sub ($model) { $vtree } >>. Renders the model into a fresh declarative tree starting at a Uji::window().
+
+=head4 C<channel>
+
+The message channel. Defaults to a fresh L<Acme::Parataxis::Channel> with a capacity of 1024.
+
+=head4 C<driver>
+
+A L<Uji::Driver>. Defaults to C<Uji::Driver::detect()>, which returns a native driver for the platform.
+
+=head4 C<reconciler>
+
+A L<Uji::Reconciler>. Defaults to a new instance.
+
+=head4 C<layout>
+
+A L<Uji::Layout>. Defaults to C<< Uji::Layout->new( driver => $driver ) >> so text measurement uses the native metrics.
+
+=head4 C<subscriptions>
+
+C<< sub ($model) { ... } >> returning the subscriptions the current model wants, as a list, an
+arrayref, or a single descriptor. Each descriptor comes from L<Uji::Sub/sub_interval> or
+L<Uji::Sub/sub_on_resize>. Optional; without it the app has no subscriptions.
+
+    subscriptions => sub ($model) {
+        return [ Uji::sub_interval( 1000, { type => 'TICK' } ) ];
+    }
+
+=head4 C<model>
+
+Read-only after boot: the current model, replaced by each C<update> call.
+
+=head4 C<vtree>
+
+Read-only after boot: the current virtual tree, replaced by each render.
+
+=head4 C<active_subs>
+
+Read-only: the currently running subscriptions, keyed by identity. Exposed for tests and
+introspection; you rarely touch it. See L</Subscriptions>.
+
+=head1 Methods
+
+=head2 C<run ()>
+
+Mounts the window and starts the loop. Never returns while the window is open (the process exits when the window is
+destroyed, because the C<QUIT> message calls C<exit>). Internally it:
+
+=over
+
+=item 1. Calls C<$driver-E<gt>init($channel)> and registers the resize handler.
+
+=item 2. Boots: calls C<init>, mounts the window, computes the first layout, creates the child widgets, and syncs the
+initial subscriptions.
+
+=item 3. Spawns a fiber that polls the driver's platform events, fires any due interval subscriptions, and sleeps
+briefly between non-blocking polls.
+
+=item 4. Spawns a fiber that blocks on the channel, draining and rendering batches.
+
+=back
+
+=head2 C<_drain_and_render ( $first_msg )>
+
+Internal-ish, but extracted so tests can drive a render synchronously. Drains every straggler already queued, folds
+every pending message through C<update> in order (exiting on C<QUIT>), then re-renders once and re-syncs the
+subscriptions. This is why bursts of messages render the view exactly once per tick.
+
+The reserved C<RESIZE> event is not folded into C<update>; instead it is translated into the messages of any active
+L<Uji::Sub/sub_on_resize> subscriptions before the batch is folded.
+
+=head1 Subscriptions
+
+A subscription is a message source the model asks for. After every render the app calls the C<subscriptions>
+callback, diffs the result against the running set, and starts or stops sources as needed - so a subscription lives
+exactly as long as the view says it should:
+
+    subscriptions => sub ($model) {
+        return [
+            # tick every second while a job is in flight
+            Uji::sub_interval( 1000, { type => 'POLL_STATUS' } ),
+            # re-layout-dependent work whenever the window changes size
+            Uji::sub_on_resize( { type => 'WINDOW_RESIZED' } ),
+        ];
+    }
+
+Interval subscriptions keep their phase across renders, so re-rendering never resets a timer. Their fired messages -
+like the ones produced by an C<on_click> - are delivered through C<update>, keeping the model the single source of
+truth. See L<Uji::Sub> for the full API and the rules that decide when two subscriptions are "the same".
+
+The app's fibers are suspended while Windows runs its own modal loop - most visibly while the user drags the window
+frame. To keep the UI alive there, the driver arms a short C<WM_TIMER> for the duration of the drag and calls
+C<_pump_modal>, which ticks the subscriptions and folds + renders any resulting message inline. The same hook is
+invoked by the dialog modal pump.
+
+=head1 How it Works
+
+The whole app is a pair of cooperative fibers over a single message channel (see L<Uji|Uji/Event Loop and
+Sub-processes>):
+
+=over
+
+=item The event fiber non-blockingly drains OS messages and C<put>s C<on_*> results onto the channel.
+
+=item The render fiber waits on the channel, folds messages through C<update>, rebuilds the view with C<view>, computes
+the layout, and hands old+new trees to the reconciler - which diff them into the smallest set of native updates.
+
+=back
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point and the full round-trip walk-through
+
+=item * L<Uji::Reconciler> - the diffing engine C<run> drives
+
+=item * L<Uji::Layout> - the pure-Perl layout pass
+
+=item * L<Uji::Driver> - the platform abstraction behind mounts and C<set_prop>
+
+=item * L<Uji::Sub> - the interval and resize subscription factories
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+VTREE hashref bootstraps C<init> C<update> C<view> C<cmd> reconciler vtree
+
+=end stopwords
+
+=cut

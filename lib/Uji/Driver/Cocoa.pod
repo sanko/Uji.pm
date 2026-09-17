@@ -1,0 +1,48 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Driver::Cocoa - macOS backend (not yet implemented)
+
+=head1 DESCRIPTION
+
+L<Uji::Driver::Cocoa> is the Cocoa backend for the macOS Runtime (the Objective-C C<objc>/C<AppKit> ABI via
+libobjc.A.dylib). It subclasses L<Uji::Driver|Uji::Driver> and currently provides B<no implementations> of the driver
+surface: the stub methods it inherits from Uji::Driver are placeholders.
+
+The backend is on the roadmap (see the framework's C<TODO.md>). Until it lands, L<Uji::Driver/detect> dies on any
+non-Win32 platform, so the toolkit is Windows-only in practice.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji::Driver> - the base class and factory (the surface this backend must implement)
+
+=item * L<Uji::Driver::Win32> - the shipping Windows backend, the reference implementation
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+libobjc AppKit macOS
+
+=end stopwords
+
+=cut

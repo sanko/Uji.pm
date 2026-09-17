@@ -14,6 +14,8 @@ class MockDriver {
     field $mounts   : reader = {};
     field $unmounts : reader = {};
     field $vtree;
+    field $dialog : writer(retain_dialog) = {};    # { message => result, open => path, save => path, color => hex, prompt => text }
+
     #
     method poll_events {1}
     method mount   ($t) { $mounted = 1; $vtree = $t; $t->set_bounds( 0, 0, 360, 400 ); $mounts->{ $t->id } = 1; 1 }
@@ -90,5 +92,12 @@ class MockDriver {
         elsif ( $node->type eq 'radio' ) { $checks->{ $node->id } = $node->selected ? 1 : 0 }
         $self->_register($_) for @{ $node->children };
     }
+
+    # Dialog stubs for App/Mock parity: canned results are injected via set-dialog mocks.
+    method message_box      (%o) { $dialog->{message} // 'ok' }
+    method file_open_dialog (%o) { $dialog->{open}    // undef }
+    method file_save_dialog (%o) { $dialog->{save}    // undef }
+    method color_picker     (%o) { $dialog->{color}   // undef }
+    method prompt_dialog    (%o) { defined $dialog->{prompt} ? $dialog->{prompt} : $o{default} }
 }
 1;

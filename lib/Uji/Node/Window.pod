@@ -1,0 +1,143 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Window - the top-level application window
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::window(
+        title     => 'My App',
+        w         => 380,
+        h         => 600,
+        centered  => 1,
+        resizable => 1,
+        child     => Uji::column( ... )
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::Window> is the root of every view. There is exactly one per render, and it is the only node with a native
+top-level window. It carries the title, the requested size, whether it is resizable/centered/topmost, and the min/max
+track limits; its single child is the root layout container.
+
+The window is the B<one> node the driver gives an OS-managed size: the layout pass reads the I<measured client area>
+back from the native window before positioning children, so contents always fit the real window, not the requested one.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/window> helper.
+
+=head3 Parameters
+
+=head4 C<title>
+
+The window title. Default C<'Uji Application'>. Recomposed live (C<SetWindowTextW> on the title bar).
+
+=head4 C<w> / C<h>
+
+Requested outer width/height in pixels. Default C<0> each, letting the platform decide.
+
+=head4 C<child>
+
+The root layout container (usually a C<column>). Optional - a window with no child renders an empty content area.
+
+=head4 C<centered>
+
+C<1> to center the window on the screen at creation. Default C<0>.
+
+=head4 C<resizable>
+
+C<1> (default) for a normal resizable frame, C<0> to fix the size (the C<WS_THICKFRAME> style is dropped at mount).
+
+=head4 C<topmost>
+
+C<1> to keep the window above all others. Default C<0>. Recomposed live.
+
+=head4 C<minimized> / C<maximized>
+
+Initial window state flags. Default C<0> each. Recomposed live.
+
+=head4 C<min_w> / C<min_h> / C<max_w> / C<max_h>
+
+Track-size constraints in pixels enforced by the OS (via C<WM_GETMINMAXINFO>). C<0> means unconstrained. Recomposed
+live.
+
+=head3 Inherited Parameters
+
+Inherits the common parameters from L<Uji::Node|Uji::Node/Parameters> (C<id>, C<x>/C<y>/C<w>/C<h>, C<visible>, ...).
+
+=head1 Methods
+
+=head2 C<title>
+
+Returns the window title.
+
+=head2 C<child>
+
+Returns the root child node (or C<undef>).
+
+=head2 C<resizable>, C<centered>, C<topmost>, C<minimized>, C<maximized>
+
+Return the current window-state flags.
+
+=head2 C<min_w>, C<min_h>, C<max_w>, C<max_h>
+
+Return the track-size constraints (C<0> = unconstrained).
+
+=head2 C<children>
+
+Returns C<[ $child ]> when a child is set, else C<[]>.
+
+=head2 C<type>
+
+Returns the string C<'window'>.
+
+=head1 How it Works
+
+On Win32 the window is created with C<WS_OVERLAPPEDWINDOW> (minus C<WS_THICKFRAME> when not resizable). After creation
+the driver measures the I<real> client size (the outer size includes the title bar and borders) and writes it back into
+the node's bounds before children are laid out. C<centered> re-positions after the final size; C<topmost> applies
+C<SetWindowPos>; C<minimized>/C<maximized> use C<ShowWindow>. During resizing, C<WM_SIZE> triggers a synchronous
+re-layout, so children track the live size. C<WM_GETMINMAXINFO> clamps the drag size to the C<min/max> constraints.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<window>) and The Render Pipeline
+
+=item * L<Uji::Node::Column> - the usual C<child> root
+
+=item * L<Uji::Driver::Win32> - mount, WM_SIZE, and WM_GETMINMAXINFO handling
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+WS_OVERLAPPEDWINDOW WS_THICKFRAME WM_SIZE WM_GETMINMAXINFO SetWindowTextW SetWindowPos ShowWindow topmost resizable
+hashref recomposed
+
+=end stopwords
+
+=cut

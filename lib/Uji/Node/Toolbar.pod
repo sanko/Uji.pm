@@ -1,0 +1,128 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Toolbar - a row of text actions
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::toolbar(
+        buttons => [
+            { label => 'New',   id => 'new'   },
+            { label => 'Open',  id => 'open'  },
+            { label => '',      id => 'sep', separator => 1 },
+            { label => 'Save',  id => 'save', checked => 1 },
+            { label => 'Delete', id => 'del'  },
+        ],
+        on_click => sub ($id) { { type => 'TB_CLICK', id => $id } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::Toolbar> is a horizontal row of action buttons (with optional separators). On Win32 it is a native
+C<ToolbarWindow32> with the C<TBSTYLE_FLAT | TBSTYLE_LIST> styles.
+
+Each button is C<< { label => '...', id => '...' } >> with optional boolean C<checked> and C<enabled> flags. A
+separator is indicated by C<< { separator => 1 } >>. Buttons can be dynamically added, removed, or reordered by
+replacing the C<buttons> array in the model; the reconciler diffs the list and rebuilds only when it changes.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/toolbar> helper.
+
+=head3 Parameters
+
+=head4 C<buttons>
+
+Array reference of button descriptors:
+
+    { label => '...', id => '...', separator => 0, checked => 0, enabled => 1 }
+
+C<label> is the display text. C<id> is a string used by C<on_click> to identify which button was pressed. C<separator>
+(boolean) renders a thin vertical divider. C<checked> and C<enabled> control the initial native button state.
+
+Default C<[]>.
+
+=head4 C<on_click>
+
+A callback receiving the C<id> of the clicked button:
+
+    on_click => sub ($id) { { type => 'TB_CLICK', id => $id } }
+
+Return a message hashref (or C<undef> to ignore the event).
+
+=head3 Inherited Parameters
+
+L<Uji::Node::Toolbar> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
+C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, and C<id>.
+
+=head1 Methods
+
+=head2 C<buttons>
+
+Returns the array reference of button descriptors.
+
+=head2 C<on_click>
+
+Returns the click callback (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'toolbar'>.
+
+=head1 How it Works
+
+On Win32 the toolbar is a native C<ToolbarWindow32> with C<WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | CCS_TOP |
+TBSTYLE_FLAT | TBSTYLE_LIST>. Each button is inserted individually via C<TB_ADDSTRINGW> (label into the native string
+table) and packed into a C<TBBSTRUCT> via C<TB_ADDBUTTONSW>. Each button is assigned a unique C<idCommand> from a
+driver-wide counter starting at 0x4000.
+
+Button clicks arrive as C<WM_COMMAND> (C<LOWORD(wParam) = idCommand>, C<HIWORD(wParam) = 0>). The driver maps
+C<idCommand> back to the button's C<id> via the registry record and invokes C<on_click>.
+
+The reconciler diffs C<buttons> using a composite key (C<id|label|separator|checked|enabled|width>). When the list
+changes, C<set_prop('buttons')> wipes and re-populates the native toolbar via C<TB_BUTTONCOUNT>, C<TB_DELETEBUTTON>,
+C<TB_ADDSTRINGW>, and C<TB_ADDBUTTONSW>.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<toolbar>)
+
+=item * L<Uji::Node::Button> - single push button
+
+=item * L<Uji::Node::MenuBar> - application-level menus
+
+=item * L<Uji::Node> - base class and common parameters
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+TBSTYLE_FLAT TBSTYLE_LIST TBSTYLE_BUTTON CCS_TOP TB_ADDBUTTONSW TB_ADDSTRINGW TB_BUTTONCOUNT TB_DELETEBUTTON
+TB_ISBUTTONCHECKED TB_ISBUTTONENABLED idCommand hwnd hashref
+
+=end stopwords
+
+=cut
