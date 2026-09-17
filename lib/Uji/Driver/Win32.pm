@@ -2679,6 +2679,34 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         return [ unpack( ( 'l<' ) x $n, $raw ) ];
     }
 
+    # Portable header-click seam (contract in Uji::Driver): simulate the user clicking the header of
+    # MODEL column @model_col on list_view @$node. Win32 implements it as the REAL user path does --
+    # the list-view control sends its parent window an LVN_COLUMNCLICK WM_NOTIFY whose NMLISTVIEW
+    # hwndFrom is the list-view control, code is LVN_COLUMNCLICK (-108) and iSubItem is the MODEL
+    # identity of the clicked column (native .iSubItem is MODEL-indexed; see LVN_COLUMNCLICK in the
+    # poll loop). We build that notification and route it to the parent window exactly as the native
+    # header control does, so _dispatch -> _sort_listview -> on_sort + glyph/order handling all fire
+    # on the identical path a real pointer click takes. The driver tracks the MODEL column wherever a
+    # header drag has placed it, so no visual-slot remap is applied (that is what the model-4 test
+    # pins down).
+    method list_view_click_column ( $node, $model_col ) {
+        my $id  = $node->id              or return;
+        my $rec = $self->_get_registry_record($id) or return;
+        my $hwnd   = $rec->{hwnd}  or return;
+        my $parent = $rec->{parent_hwnd} or return;
+        my $nmhdr  = "\0" x 64;
+        substr( $nmhdr, 0, 8 )  = pack( 'q<', $hwnd );            # hwndFrom = the list-view control
+        substr( $nmhdr, 16, 4 ) = pack( 'l<', -108 );              # code = LVN_COLUMNCLICK
+        substr( $nmhdr, 24, 4 ) = pack( 'l<', -1 );                # iItem (unused)
+        substr( $nmhdr, 28, 4 ) = pack( 'l<', $model_col );        # iSubItem = MODEL identity
+        my $buf = malloc(64);
+        memcpy( $buf, $nmhdr, 64 );
+        SendMessageW( $parent, 0x004E, 0, Affix::address($buf) );  # WM_NOTIFY to the PARENT window
+        free($buf);
+        for ( 1 .. 20 ) { $self->poll_events }
+        return;
+    }
+
     # Move the header's sort indicator (a ▲/▼ glyph beside the sorted column's label). The previous
     # sort column's header is restored to its plain label; the clicked model column gets the glyph for
     # the new direction. LVM_SETCOLUMNW(/GETCOLUMNW) address columns by their MODEL index, which

@@ -22,5 +22,12 @@ class Uji::Driver v0.0.1 {    # Base class/factory for OS detection
     method file_save_dialog (%o) {...}
     method color_picker     (%o) {...}
     method prompt_dialog    (%o) {...}
+
+    # Portable header-click simulation: report a click on list_view MODEL column @model_col to the
+    # driver. Each backend fires the same semantic the native "user sorted by this column" path does
+    # (Win32: build & route an LVN_COLUMNCLICK WM_NOTIFY to the list's parent window; GTK/Cocoa:
+    # emit their native column-header click signal), so on_sort + glyph/indicator handling is
+    # exercised identically on every platform. Tests must call THIS, never a backend WM_* constant.
+    method list_view_click_column ( $node, $model_col ) {...}
 };
 1;

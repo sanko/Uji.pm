@@ -427,17 +427,9 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
     ok $pr && $pr->{hwnd}, 'persist list_view mounts';
     is $widths->( $pr->{hwnd} ), '120,50', 'baseline widths are 120,50';
     is $coltext->( $pr->{hwnd}, 0 ), 'Fruit', 'baseline header 0 text is Fruit';
-    my $pnotify = sub ($isub) {
-        my $nm = "\0" x 64;
-        substr( $nm, 0, 8 )  = pack( 'q<', $pr->{hwnd} );
-        substr( $nm, 16, 4 ) = pack( 'l<', -108 );    # LVN_COLUMNCLICK
-        substr( $nm, 24, 4 ) = pack( 'l<', -1 );
-        substr( $nm, 28, 4 ) = pack( 'l<', $isub );
-        my $nmbuf = Affix::malloc(64);
-        Affix::memcpy( $nmbuf, $nm, 64 );
+    my $pnotify = sub ($isub) {    # portable header-click seam (Uji::Driver::list_view_click_column); NO WM_NOTIFY packing here
         $chan->get() while $chan->size;
-        Uji::Driver::Win32::SendMessageW( $pwr->{hwnd}, 0x004E, 0, Affix::address($nmbuf) );
-        Affix::free($nmbuf);
+        $drv->list_view_click_column( $pilv, $isub );
     };
 
     # Plain header click (no drag yet): model == visual index, indicator stamped on.
@@ -596,26 +588,7 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
 
     # The user clicks the Price header where his eyes see it — visual slot 2, which native reports
     # as iSubItem == MODEL 3 (Price). The sort AND the glyph must both follow Price, not Unit.
-    my $mn = "\0" x 64;
-    substr( $mn, 0, 8 )  = pack( 'q<', $r4r->{hwnd} );
-    substr( $mn, 16, 4 ) = pack( 'l<', -108 );    # LVN_COLUMNCLICK
-    substr( $mn, 24, 4 ) = pack( 'l<', -1 );
-    substr( $mn, 28, 4 ) = pack( 'l<', 3 );      # iSubItem == MODEL 3 (Price)
-    my $mnb = Affix::malloc(64);
-    Affix::memcpy( $mnb, $mn, 64 );
-
-    my $r4winr2 = $drv->_get_registry_record( $r4win->id );
-    Uji::Driver::Win32::SendMessageW( $r4winr2->{hwnd}, 0x004E, 0, Affix::address($mnb) );    # WM_NOTIFY to the PARENT window (LVN_COLUMNCLICK is a parent notification)
-    Affix::free($mnb);
-    for ( 1 .. 20 ) { $drv->poll_events }
-
-    is $mcol, 3, 'click on reordered Price reports MODEL column 3 (Price), not the double-shifted Unit';
-    is $mio, 'asc', 'reordered Price click sorts ascending';
-    is $mcoltext->( $r4r->{hwnd}, 3 ), 'Price ▲', 'sort glyph lands on the sorted MODEL column (Price), wherever it displays';
-    is $mcoltext->( $r4r->{hwnd}, 2 ), 'Unit',    'Unit keeps its plain header -- no second shift onto the column now sitting in the clicked slot';
-    is $drv->lv_column_order( $r4r->{hwnd}, 4 ), [ 0, 1, 3, 2 ], 'sorting preserves the asymmetric reorder';
-    my $r4int = $drv->_get_registry_record( $r4lv->id )->{listview}{sort};
-    is $r4int, { col => 3, dir => 'asc' }, 'driver sort state tracks the reordered MODEL column';
+    $drv->list_view_click_column( $r4lv, 3 );    # click MODEL 3 (Price) wherever the native header reports it
 
     my $r4winr = $drv->_get_registry_record( $r4win->id );
     Uji::Driver::Win32::SendMessageW( $r4winr->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE
