@@ -634,7 +634,6 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             my $id     = $self->_registry_id_by_key( $from, 'hwnd' ) or return ( 0, undef );
             my $record = $registry->{$id}                            or return ( 0, undef );
             my $node   = $record->{node}                             or return ( 0, undef );
-
             # TCN_SELCHANGE (-551): the user clicked a tab. Sync the record's live index, flip
             # the visible panel subtree, and dispatch on_select with the new index.
             # (TCN_SELCHANGING is -552 and is ignored; only the change matters.)
@@ -665,12 +664,37 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 return ( 1, 0 );
             }
 
-            # LVN_ITEMCHANGED (-102): the user clicked/arrowed a row (or the model re-selected via
-            # set_prop('value')). NMLISTVIEW.iItem sits at raw offset 24 and uNewState at 32. The
-            # record's slot table maps the row index back to the model value. Ignore focus-only and
-            # deselect notifications (uNewState without LVIS_SELECTED) and programmatic selection
-            # (silenced by set_prop the same way editable combo text is).
-            if ( $node->type eq 'list_view' && $nm->{code} == -102 ) {
+            # LVN_COLUMNCLICK (-108, LVN_FIRST-8): the user clicked a column header. When the list is
+            # `sortable`, retarget the visible rows by that column (per-column `sort => 'numeric'`,
+            # else text), toggling asc/desc on repeated clicks, then dispatch on_sort so the app can
+            # reorder its own `rows`. The NMLISTVIEW.iSubItem (offset 28) holds the column index.
+            if ( $node->type eq 'list_view' && $nm->{code} == -108 ) {
+                my $lv = $record->{listview};
+                if ( $lv && $node->sortable ) {
+                    my $raw = Affix::raw( $lparam, 40 );
+                    # NMLISTVIEW.iSubItem. Post-reorder, the native header reports the column by its
+                    # MODEL identity (its index in the column array), not the visual slot it displays
+                    # in — so a header drag + click does NOT map back through lv_column_order (that
+                    # would double-shift onto the column that happens to sit in the clicked slot).
+                    my $col = unpack( 'l<', substr( $raw, 28, 4 ) );
+                    my $dir = ( $lv->{sort}{col} // -1 ) == $col && $lv->{sort}{dir} eq 'asc' ? 'desc' : 'asc';
+                    $self->_sort_listview( $id, $col, $dir );
+                    if ( $node->can('on_sort') && $node->on_sort ) {
+                        my $action = $node->on_sort->( $col, $dir );
+                        $self->channel->put($action) if $action;
+                    }
+                }
+                return ( 1, 0 );
+            }
+
+            # LVN_ITEMCHANGED (-101, LVN_FIRST-1): the user clicked/arrowed a row (or the model
+            # re-selected via set_prop('value')). NMLISTVIEW.iItem sits at raw offset 24 and
+            # uNewState at 32. The record's slot table maps the row index back to the model value.
+            # Ignore focus-only and deselect notifications (uNewState without LVIS_SELECTED) and
+            # programmatic selection (silenced by set_prop the same way editable combo text is).
+            # NB: the populate-time flood of -104 (LVN_DELETEALLITEMS) / -102 (LVN_INSERTITEM)
+            # notifications carries no state and is naturally skipped by the LVIS_SELECTED mask.
+            if ( $node->type eq 'list_view' && $nm->{code} == -101 ) {
                 return ( 1, 0 ) if $self->_is_suppressed;
                 my $raw = Affix::raw( $lparam, 64 );
                 my $iit = unpack( 'l<', substr( $raw, 24, 4 ) );
@@ -1129,6 +1153,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         }
         free($msg_ptr);
         $self->_repaint_active_spin_arrows;
+        $self->_sync_column_orders;
     }
 
     method _mount_node ( $vnode, $parent_hwnd ) {
@@ -1415,6 +1440,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             my $ex = 0x00010000;    # LVS_EX_DOUBLEBUFFER: flicker-free repaints
             $ex |= 0x00000020 if $vnode->full_row_select;    # LVS_EX_FULLROWSELECT
             $ex |= 0x00000001 if $vnode->grid_lines;         # LVS_EX_GRIDLINES
+            $ex |= 0x00000010 if $vnode->reorderable;        # LVS_EX_HEADERDRAGDROP: drag header items to reorder columns
             SendMessageW( $hwnd, 0x1036, 0, $ex );           # LVM_SETEXTENDEDLISTVIEWSTYLE
             $registry->{ $vnode->id }{listview} = { slots => [], ncols => 0 };
             $self->_populate_listview( $vnode->id );
@@ -1828,7 +1854,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         }
         elsif ( $prop_name eq 'rows' || $prop_name eq 'columns' ) {    # list_view: rebuild the table + reselect
             return unless $record->{node}->type eq 'list_view';
-            $self->_populate_listview($vnode_id);
+            # 'rows' reuses the live columns (widths + drag order survive); 'columns' recreates them.
+            $self->_populate_listview( $vnode_id, $prop_name eq 'rows' ? 1 : 0 );
         }
         elsif ( $prop_name eq 'nodes' || $prop_name eq 'expanded' ) {    # tree_view: rebuild the item tree + reselect
             return unless $record->{node}->type eq 'tree_view';
@@ -2445,90 +2472,274 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     # by the control during the call, so it is freed immediately after.
     my $LVITEM = 'L< l< l< L< L< x4 q< l< l< q< l< l< L< x4 q< q< l< x4';    # 88 bytes on x64
 
-    method _populate_listview ($id) {
+    method _populate_listview ( $id, $reuse_columns = 0 ) {
         my $rec  = $registry->{$id} or return;
         my $hwnd = $rec->{hwnd}     or return;
         my $node = $rec->{node}     or return;
         my $lv   = $rec->{listview} ||= { slots => [], ncols => 0 };
 
-        # Repopulate resets the native selection; drop all rows, then the tracked columns.
+        # Repopulate resets the native selection; drop all rows. Columns are only re-inserted when
+        # the definitions actually changed (set_prop('columns') or first mount): a rows-only reconcile
+        # (set_prop('rows')) reuses the live columns so user-resized widths and any drag-reordered
+        # column order survive a sort.
         SendMessageW( $hwnd, 0x1009, 0, 0 );                                       # LVM_DELETEALLITEMS
-        my $old_n = $lv->{ncols} // 0;
-        SendMessageW( $hwnd, 0x101C, 0, 0 ) while $old_n-- > 0;                    # LVM_DELETECOLUMN(0)
-        $lv->{ncols} = 0;
         $lv->{slots} = [];
+        $reuse_columns = 0 if ( $lv->{ncols} // 0 ) != scalar @{ $node->columns // [] };
+        if ( !$reuse_columns ) {
+            my $old_n = $lv->{ncols} // 0;
+            SendMessageW( $hwnd, 0x101C, 0, 0 ) while $old_n-- > 0;                # LVM_DELETECOLUMN(0)
+            $lv->{ncols} = 0;
+        }
 
         my $cols = $node->columns;
         $cols = [ { label => 'Items' } ] unless @$cols;                            # bare list safety net
-        for my $i ( 0 .. $#$cols ) {
-            my $label = $cols->[$i]{label} // '';
-            my $width = $cols->[$i]{width};
-            if ( !$width ) {
-                my ($tw) = $self->measure_text($label);
-                $width = ( $tw + 24 ) < 60 ? 60 : $tw + 24;                        # glyph padding + cushion
+        if ( !$reuse_columns ) {
+            for my $i ( 0 .. $#$cols ) {
+                my $sort  = $lv->{sort} && $lv->{sort}{col} == $i;
+                my $label = $cols->[$i]{label} // '';
+                $label .= $sort ? ( $lv->{sort}{dir} eq 'asc' ? ' ▲' : ' ▼' ) : '';    # sort indicator
+                my $width = $cols->[$i]{width};
+                if ( !$width ) {
+                    my ($tw) = $self->measure_text($label);
+                    $width = ( $tw + 24 ) < 60 ? 60 : $tw + 24;                    # glyph padding + cushion
+                }
+                my $fmt  = ( { left => 0, center => 2, right => 1 }->{ $cols->[$i]{align} // 'left' } // 0 );
+                my $wide  = Encode::encode( 'UTF-16LE', $self->_nz($label) ) . "\x00\x00";
+                my $abuf  = malloc( CORE::length($wide) );
+                memcpy( $abuf, $wide, CORE::length($wide) );
+                my $bytes = pack 'L< l< l< x4 q< l< l< l< l< l< l< l< L< q< l< x4',
+                    0x000F,                       # mask = LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM
+                    $fmt,                         # LVCFMT_LEFT/RIGHT/CENTER from `align`
+                    $width,                       # cx
+                    Affix::address($abuf),        # pszText
+                    0,                            # cchTextMax
+                    $i,                           # iSubItem
+                    0, 0, 0, 0, 0, 0,             # iImage/iOrder/cxMin/cxDefault/cxIdeal/iTitle
+                    0,                            # pszTitle
+                    0;                            # cbTitle
+                my $struct = malloc( length $bytes );
+                memcpy( $struct, $bytes, length $bytes );
+                SendMessageW( $hwnd, 0x1061, $i, Affix::address($struct) );        # LVM_INSERTCOLUMNW
+                free($struct);
+                free($abuf);
             }
-            my $wide  = Encode::encode( 'UTF-16LE', $self->_nz($label) ) . "\x00\x00";
-            my $abuf  = malloc( CORE::length($wide) );
-            memcpy( $abuf, $wide, CORE::length($wide) );
-            my $bytes = pack 'L< l< l< x4 q< l< l< l< l< l< l< l< L< q< l< x4',
-                0x000E,                       # mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM
-                0,                            # fmt = LVCFMT_LEFT
-                $width,                       # cx
-                Affix::address($abuf),        # pszText
-                0,                            # cchTextMax
-                $i,                           # iSubItem
-                0, 0, 0, 0, 0, 0,             # iImage/iOrder/cxMin/cxDefault/cxIdeal/iTitle
-                0,                            # pszTitle
-                0;                            # cbTitle
-            my $struct = malloc( length $bytes );
-            memcpy( $struct, $bytes, length $bytes );
-            SendMessageW( $hwnd, 0x1061, $i, Affix::address($struct) );            # LVM_INSERTCOLUMNW
-            free($struct);
-            free($abuf);
+            $lv->{ncols}  = scalar @$cols;
+            $lv->{colorder} = [ 0 .. ( scalar @$cols ) - 1 ];
         }
-        $lv->{ncols} = scalar @$cols;
 
         my $i = 0;
         for my $row ( @{ $node->rows // [] } ) {
             my $cells = ref $row eq 'HASH' ? $row->{columns} : $row;
             my $value = ref $row eq 'HASH' ? $row->{value} : ( $cells->[0] // '' );
-            push @{ $lv->{slots} }, { value => $value };
-            if ($cells) {
-                for my $c ( 0 .. $#$cells ) {
-                    my $cell = '' . ( $cells->[$c] // '' );
-                    my $wide = Encode::encode( 'UTF-16LE', $self->_nz($cell) ) . "\x00\x00";
-                    my $abuf = malloc( CORE::length($wide) );
-                    memcpy( $abuf, $wide, CORE::length($wide) );
-                    my $bytes = pack $LVITEM,
-                        0x0001,                       # mask = LVIF_TEXT
-                        $i,                           # iItem
-                        $c,                           # iSubItem
-                        0, 0,                         # state / stateMask
-                        Affix::address($abuf),        # pszText
-                        0,                            # cchTextMax
-                        0,                            # iImage
-                        0,                            # lParam
-                        0, 0, 0,                      # iIndent / iGroupId / cColumns
-                        0, 0, 0;                      # puColumns / piColFmt / iGroup
-                    my $struct = malloc( length $bytes );
-                    memcpy( $struct, $bytes, length $bytes );
-                    if ( $c == 0 ) {
-                        SendMessageW( $hwnd, 0x104D, $i, Affix::address($struct) );    # LVM_INSERTITEMW
-                    }
-                    else {
-                        # LVM_SETITEMW (not LVM_SETITEMTEXTW, which implicitly no-ops for
-                        # subitems > 0) writes the cell into the existing item.
-                        SendMessageW( $hwnd, 0x104C, 0, Affix::address($struct) );    # LVM_SETITEMW
-                    }
-                    free($struct);
-                    free($abuf);
-                }
-            }
+            push @{ $lv->{slots} }, {
+                value   => $value,
+                columns => [ map { '' . ( $_ // '' ) } @{ $cells || [] } ],
+            };
+            $self->_lv_write_row( $hwnd, $i, $lv->{slots}[-1]{columns}, $node->columns );
             $i++;
         }
 
-        # Repopulate reset the native selection; restore the model's.
-        $self->_select_listvalue( $id, $node->value );
+        # Repopulate reset the native selection; restore the model's. An active user sort (LVN_COLUMNCLICK
+        # or re-applied from the reconciler) is kept leading: the sorted slots are rebuilt and selection is
+        # re-applied against the OPTICAL order.
+        if ( $lv->{sort} ) {
+            $self->_sort_listview( $id, $lv->{sort}{col}, $lv->{sort}{dir}, $node->value );
+        }
+        else {
+            $self->_select_listvalue( $id, $node->value );
+        }
+    }
+
+    # Insert (column 0) / set (later columns) one row's text cells in the native control. When the
+    # column definition carries a `format` (e.g. '$%0.2f') the DISPLAY text is sprintf'd from the
+    # (numeric) cell, but the slot keeps the RAW cell so `_sort_listview` never sorts formatted
+    # strings. Cell text is copied by the control during the call, so each UTF-16 buffer is freed
+    # immediately after.
+    method _lv_write_row ( $hwnd, $row, $cells, $columns = undef ) {
+        for my $c ( 0 .. $#$cells ) {
+            my $cell = '' . ( $cells->[$c] // '' );
+            my $colh = $columns->[$c] // {};
+            my $fmt  = $colh->{format} || '';
+            if ( $fmt ne '' && $cell =~ /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/ ) {
+                $cell = sprintf $fmt, 0 + $cell;
+            }
+            my $wide = Encode::encode( 'UTF-16LE', $self->_nz($cell) ) . "\x00\x00";
+            my $abuf = malloc( CORE::length($wide) );
+            memcpy( $abuf, $wide, CORE::length($wide) );
+            my $bytes = pack $LVITEM,
+                0x0001,                       # mask = LVIF_TEXT
+                $row,                         # iItem
+                $c,                           # iSubItem
+                0, 0,                         # state / stateMask
+                Affix::address($abuf),        # pszText
+                0,                            # cchTextMax
+                0,                            # iImage
+                0,                            # lParam
+                0, 0, 0,                      # iIndent / iGroupId / cColumns
+                0, 0, 0;                      # puColumns / piColFmt / iGroup
+            my $struct = malloc( length $bytes );
+            memcpy( $struct, $bytes, length $bytes );
+            if ( $c == 0 ) {
+                SendMessageW( $hwnd, 0x104D, $row, Affix::address($struct) );    # LVM_INSERTITEMW
+            }
+            else {
+                # LVM_SETITEMW (not LVM_SETITEMTEXTW, which implicitly no-ops for
+                # subitems > 0) writes the cell into the existing item.
+                SendMessageW( $hwnd, 0x104C, 0, Affix::address($struct) );    # LVM_SETITEMW
+            }
+            free($struct);
+            free($abuf);
+        }
+    }
+
+    # Rebuild the native rows in sorted order. Sorting stays a display concern: the slot table (row
+    # index -> model value) is re-permuted from the RAW cells (the model columns are untouched), the
+    # currently-selected VALUES are re-selected (suppressed) against the new optical order, and an
+    # on_sort action lets the app reorder its own `rows` for the model truth. Per-column `sort =>`
+    # 'numeric' (default 'text') picks the comparator; cell text is stored on the slot at populate.
+    # $want selects which values stay selected: a list of values (repopulate path - the native
+    # selection has been reset by LVM_DELETEALLITEMS), or 'snapshot' (user click - preserved from
+    # the native control before the rebuild).
+    method _sort_listview ( $id, $col, $dir, $want = 'snapshot' ) {
+        my $rec  = $registry->{$id} or return;
+        my $hwnd = $rec->{hwnd}     or return;
+        my $node = $rec->{node}     or return;
+        my $lv   = $rec->{listview} or return;
+        my $ncols = $lv->{ncols} // 0;
+        return if $col < 0 || $col >= $ncols;
+        my $numeric = ( ( $node->columns->[$col] // {} )->{sort} // 'text' ) eq 'numeric';
+
+        # Which VALUES remain selected after the rebuild.
+        my %sel;
+        if ( ref $want eq 'ARRAY' ) {
+            $sel{$_} = 1 for map { ( $_ // '' ) } @$want;
+        }
+        elsif ( defined $want && $want ne 'snapshot' ) {
+            $sel{ '' . $want } = 1;
+        }
+        else {
+            for my $i ( 0 .. $#{ $lv->{slots} } ) {
+                my $st = SendMessageW( $hwnd, 0x102C, $i, 0x0002 );    # LVM_GETITEMSTATE(i, LVIS_SELECTED)
+                $sel{ ( $lv->{slots}[$i]{value} // '' ) } = 1 if $st & 0x0002;
+            }
+        }
+
+        my $cell = sub ($i) {
+            my $cs = $lv->{slots}[$i]{columns};
+            return $cs ? ( '' . ( $cs->[$col] // '' ) ) : '';
+        };
+        my @order = 0 .. $#{ $lv->{slots} };
+        @order = sort {
+            my $cmp = $numeric
+                ? ( ( $cell->($a) + 0 ) <=> ( $cell->($b) + 0 ) )
+                : ( lc( $cell->($a) ) cmp lc( $cell->($b) ) );
+            return $cmp if $cmp;
+            ( ( $lv->{slots}[$a]{value} // '' ) cmp ( $lv->{slots}[$b]{value} // '' ) );    # stable tiebreak
+        } @order;
+        @order = reverse @order if $dir eq 'desc';
+
+        # Rebuild the native rows in the sorted order.
+        SendMessageW( $hwnd, 0x1009, 0, 0 );    # LVM_DELETEALLITEMS
+        my $i = 0;
+        for my $oi (@order) {
+            $self->_lv_write_row( $hwnd, $i, $lv->{slots}[$oi]{columns}, $node->columns );
+            $i++;
+        }
+        my $old_col = $lv->{sort} ? $lv->{sort}{col} : undef;
+        $lv->{slots} = [ map { $lv->{slots}[$_] } @order ];
+        $lv->{sort}  = { col => $col, dir => $dir };
+        $self->_apply_sort_indicator( $id, $old_col, $col, $dir );
+
+        # Re-select the same VALUES in the new order (suppressed: model-driven, not a user click).
+        $suppress_events = 1;
+        for my $i ( 0 .. $#{ $lv->{slots} } ) {
+            next unless $sel{ $lv->{slots}[$i]{value} // '' };
+            my $selb = pack $LVITEM,
+                0x0008, $i, 0, 0x0002, 0x0002, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0;    # LVIF_STATE, state=LVIS_SELECTED
+            my $sbuf = malloc( length $selb );
+            memcpy( $sbuf, $selb, length $selb );
+            SendMessageW( $hwnd, 0x102B, $i, Affix::address($sbuf) );    # LVM_SETITEMSTATE
+            free($sbuf);
+        }
+        $suppress_events = 0;
+        for my $i ( 0 .. $#{ $lv->{slots} } ) {
+            next unless $sel{ $lv->{slots}[$i]{value} // '' };
+            SendMessageW( $hwnd, 0x1013, 1, $i );    # LVM_ENSUREVISIBLE
+            last unless $node->multiple;
+        }
+    }
+
+    # Read the listview's current left-to-right column order (LVM_GETCOLUMNORDERARRAY).
+    method lv_column_order ( $hwnd, $n ) {
+        return [] unless $hwnd && $n > 0;
+        my $buf = malloc( $n * 4 );
+        SendMessageW( $hwnd, 0x103B, $n, Affix::address($buf) );    # LVM_GETCOLUMNORDERARRAY
+        my $raw = Affix::raw( $buf, $n * 4 );
+        free($buf);
+        return [ unpack( ( 'l<' ) x $n, $raw ) ];
+    }
+
+    # Move the header's sort indicator (a ▲/▼ glyph beside the sorted column's label). The previous
+    # sort column's header is restored to its plain label; the clicked model column gets the glyph for
+    # the new direction. LVM_SETCOLUMNW(/GETCOLUMNW) address columns by their MODEL index, which
+    # follows the item wherever a header drag has placed it, so no visual-index mapping is needed and
+    # neither the user-resized widths nor a drag-reordered column order are disturbed.
+    method _apply_sort_indicator ( $id, $from_col, $to_col, $dir ) {
+        my $rec  = $registry->{$id} or return;
+        my $hwnd = $rec->{hwnd}     or return;
+        my $node = $rec->{node}     or return;
+        my $lv   = $rec->{listview} or return;
+        my $ncols = $lv->{ncols} // 0;
+        if ( defined $from_col && $from_col < $ncols ) {
+            my $label = ( $node->columns->[$from_col] // {} )->{label} // '';
+            $self->_set_header_label( $hwnd, $from_col, $label );
+        }
+        if ( defined $to_col && $to_col < $ncols ) {
+            my $label = ( $node->columns->[$to_col] // {} )->{label} // '';
+            $label .= $dir eq 'asc' ? ' ▲' : ' ▼';
+            $self->_set_header_label( $hwnd, $to_col, $label );
+        }
+    }
+
+    # In-place header label replacement for one column (LVM_SETCOLUMNW with LVCF_TEXT only). The text
+    # buffer is copied by the control during the call, so it is freed immediately after.
+    method _set_header_label ( $hwnd, $vis, $label ) {
+        my $wide  = Encode::encode( 'UTF-16LE', $self->_nz($label) ) . "\x00\x00";
+        my $abuf  = malloc( CORE::length($wide) );
+        memcpy( $abuf, $wide, CORE::length($wide) );
+        my $bytes = pack 'L< l< l< x4 q< l< l< l< l< l< l< l< L< q< l< x4',
+            0x0004, 0, 0, Affix::address($abuf), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0;    # LVCF_TEXT
+        my $struct = malloc( length $bytes );
+        memcpy( $struct, $bytes, length $bytes );
+        SendMessageW( $hwnd, 0x1060, $vis, Affix::address($struct) );    # LVM_SETCOLUMNW
+        free($struct);
+        free($abuf);
+    }
+
+    # Poll-time sync for reorderable list_view columns: after the user drags a header item, the native
+    # control reorders columns + data itself (LVS_EX_HEADERDRAGDROP); we only need to learn the new order
+    # (LVM_GETCOLUMNORDERARRAY) so the driver keeps `colorder` current and can tell the app. Compared per
+    # poll - a single small query per reorderable list - and on_change dispatches on_reorder.
+    method _sync_column_orders () {
+        return unless %$registry;
+        for my $id ( keys %$registry ) {
+            my $rec = $registry->{$id} or next;
+            next unless $rec->{node} && $rec->{node}->type eq 'list_view' && $rec->{node}->reorderable;
+            my $lv    = $rec->{listview} or next;
+            my $hwnd  = $rec->{hwnd}     or next;
+            my $n     = $lv->{ncols} // 0;
+            next unless $n;
+            my $order = $self->lv_column_order( $hwnd, $n );
+            my $have  = $lv->{colorder} ||= [ 0 .. $n - 1 ];
+            my $same  = 1;
+            for my $i ( 0 .. $n - 1 ) { $same = 0 if ( $order->[$i] // -1 ) != ( $have->[$i] // -1 ); }
+            next if $same;
+            $lv->{colorder} = $order;
+            if ( $rec->{node}->can('on_reorder') && $rec->{node}->on_reorder ) {
+                my $action = $rec->{node}->on_reorder->( [ @$order ] );
+                $self->channel->put($action) if $action;
+            }
+        }
     }
 
     # Apply the model's selection to the native list (used at mount, after a repopulate, and from

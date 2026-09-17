@@ -38,6 +38,22 @@ Uji::Node::ListView - a multi-column, scrollable selection list (a table)
         on_select => sub ($v) { { type => 'SET_PICKS', value => $v } }    # $v is an arrayref
     );
 
+    # Sortable columns, drag-to-reorder, and a formatted money column.
+    Uji::list_view(
+        sortable    => 1,
+        reorderable => 1,
+        columns => [
+            { label => 'SKU',   width => 120 },
+            { label => 'Price', width => 80, format => '$%0.2f', sort => 'numeric' },
+        ],
+        rows  => [
+            ['AB-12', '3'],
+            ['AB-21', '2'],
+        ],
+        on_sort    => sub ($col, $dir) { { type => 'RESORT', column => $col, dir => $dir } },    # re-sort your own rows here
+        on_reorder => sub ($order) { { type => 'REORDER_COLS', order => $order } },              # $order = new left-to-right column indexes
+    );
+
 =head1 DESCRIPTION
 
 L<Uji::Node::ListView> is a visible, scrollable multi-column list (a table). A single selection is stored as a scalar
@@ -60,8 +76,15 @@ Recomposed live by the reconciler.
 =head4 C<columns>
 
 Array reference of C<< { label => ..., width => ... } >> hashrefs defining the column headers. C<width> (pixels)
-defaults to the measured label width, C<label> defaults to C<''>. When the columns change the reconciler rebuilds the
-table.
+defaults to the measured label width, C<label> defaults to C<''>. Optional per-column keys: C<sort> (C<'text'> or
+C<'numeric'>, default C<'text'>) picks the comparator used when the column is clicked (C<sortable> lists click the
+headers to sort); C<format> applies a C<sprintf> format to numeric cells for display (e.g. C<{ label => 'Price',
+width => 80, format => '$%0.2f' }> renders C<12.5> as C<$12.50> — cells always C<sort> by their raw value); and
+C<align> (C<'left'>, C<'center'> or C<'right'>, default C<'left'>) maps to the native C<LVCFMT_LEFT/CENTER/RIGHT>
+header alignment. When either the C<columns> or the C<rows> property changes the table is rebuilt; a rows-only
+change (e.g re-applying the app's own sorted C<rows>) reuses the live native columns so user-resized widths and a
+drag-reordered column order survive. The sorted column's header carries a sort indicator glyph (C<▲> ascending /
+C<▼> descending) that follows the column wherever a header drag has moved it.
 
 =head4 C<rows>
 
@@ -76,6 +99,32 @@ A callback receiving the selected row's C<value> (or an arrayref of them when L<
     on_select => sub ($v) { { type => 'SET_SKU', value => $v } }
 
 Return a message hashref (or C<undef> to ignore the event).
+
+=head4 C<on_sort>
+
+A callback received after the user clicks a column header (only when L</sortable>): C<on_sort =E<gt> sub ($col,
+$dir) { ... }> where C<$col> is the column index and C<$dir> is C<'asc'> or C<'desc'>. A click on a new column sorts
+it ascending; clicking the same column again toggles the direction. The driver reorders the L</rows> optically, but
+the model C<rows> are untouched - an app typically re-sorts its own C<rows> here to match. Return a message hashref
+(or C<undef>).
+
+=head4 C<on_reorder>
+
+A callback received after the user drags a column header off its place (only when L</reorderable>):
+C<on_reorder =E<gt> sub ($order) { ... }> where C<$order> is an arrayref of the new left-to-right column indexes.
+The native control already rearranges the visible table; the app usually rewrites its C<columns>/C<rows> model order
+to match. Return a message hashref (or C<undef>).
+
+=head4 C<sortable>
+
+Boolean, default false. When true the column headers are clickable and a click reorders the visible rows by that
+column (see C<columns>/C<sort> for the comparator; C<formatted> columns still sort by their raw values). The native
+control raises C<LVN_COLUMNCLICK>, which the driver turns into a sort + L</on_sort>.
+
+=head4 C<reorderable>
+
+Boolean, default false. When true the user can drag column headers sideways to reorder the columns (the
+C<LVS_EX_HEADERDRAGDROP> extended style). The new order is detected by the driver and reported through L</on_reorder>.
 
 =head4 C<multiple>
 
@@ -108,7 +157,15 @@ Returns the selected row's C<value> (or the arrayref of selected values when L</
 
 =head2 C<columns>
 
-Returns the array reference of C<< { label => ..., width => ... } >> columns.
+Returns the array reference of C<< { label => ..., width => ... } >> columns (possibly carrying C<sort>/C<format>).
+
+=head2 C<sortable>
+
+Returns true when clicking a column header sorts the table.
+
+=head2 C<reorderable>
+
+Returns true when the user can drag column headers to reorder the columns.
 
 =head2 C<rows>
 
@@ -142,9 +199,9 @@ Returns the string C<'list_view'>.
 
 On Win32 the table is a native C<SysListView32> created with the report view style C<LVS_REPORT> (C<0x1>) and
 C<LVS_SHOWSELALWAYS> (C<0x8>); L</multiple> omits C<LVS_SINGLESEL> (C<0x4>) and L</header> adds C<LVS_NOCOLUMNHEADER>
-(C<0x4000>). After creation the driver sets the extended styles C<LVS_EX_DOUBLEBUFFER> (C<0x10000>) and, per
-L</full_row_select> and L</grid_lines>, C<LVS_EX_FULLROWSELECT> (C<0x20>) and C<LVS_EX_GRIDLINES> (C<0x1>) via
-C<LVM_SETEXTENDEDLISTVIEWSTYLE>.
+(C<0x4000>). After creation the driver sets the extended styles C<LVS_EX_DOUBLEBUFFER> (C<0x10000>), C<LVS_EX_GRIDLINES>
+(C<0x1>) per L</grid_lines>, C<LVS_EX_FULLROWSELECT> (C<0x20>) per L</full_row_select>, and C<LVS_EX_HEADERDRAGDROP>
+(C<0x10>) per L</reorderable>, via C<LVM_SETEXTENDEDLISTVIEWSTYLE>.
 
 Columns are added with C<LVM_INSERTCOLUMNW> and an 72-byte C<LVCOLUMNW> packed to the Win64 layout (mask/fmt/cx at
 0/4/8, pszText at 16). The first column of each row is inserted with C<LVM_INSERTITEMW>; later cells are written into
@@ -156,6 +213,13 @@ stateMask C<LVIS_SELECTED>); all rows are cleared first, then each matching row 
 C<LVM_ENSUREVISIBLE>. User clicks raise C<LVN_ITEMCHANGED>, whose row index is routed back to the model value through a
 driver-side slot table (and, for L</multiple> tables, the whole native selection is read back via C<LVM_GETITEMCOUNT> /
 C<LVM_GETITEMSTATE>). Programmatic selection is suppressed so the native echo never dispatches a spurious C<on_select>.
+
+When L</sortable>, a header click makes the native control raise C<LVN_COLUMNCLICK> (the driver reads the column index
+from the notification). The driver re-permutes a slot table of raw cells (so a C<formatted> number column still sorts
+numerically), rebuilds the native rows with C<LVM_DELETEALLITEMS> + insert/set, re-selects the previously selected
+values (suppressed), and calls L</on_sort>. When L</reorderable> the native header drag reorders columns and data by
+itself; each driver poll queries the order array with C<LVM_GETCOLUMNORDERARRAY> (C<0x103B>) and dispatches
+L</on_reorder> when it moves.
 
 The I<len> used by L<Uji::Layout|Uji::Layout/DESCRIPTION> is the value stored in the model, never a handle-mutating
 call.
@@ -190,8 +254,9 @@ Sanko Robinson - L<https://github.com/sanko>
 
 LVM_INSERTCOLUMNW LVM_INSERTITEMW LVM_SETITEMW LVM_SETITEMSTATE LVM_ENSUREVISIBLE LVM_GETITEMCOUNT LVM_GETITEMSTATE
 LVCOLUMNW LVITEMW LVIF_STATE LVIS_SELECTED LVS_REPORT LVS_SHOWSELALWAYS LVS_SINGLESEL LVS_NOCOLUMNHEADER LVS_EX_GRIDLINES
-LVS_EX_FULLROWSELECT LVS_EX_DOUBLEBUFFER LVM_SETEXTENDEDLISTVIEWSTYLE LVN_ITEMCHANGED SysListView32 report
-multiselect arrayref hashref scrollable
+LVS_EX_FULLROWSELECT LVS_EX_DOUBLEBUFFER LVS_EX_HEADERDRAGDROP LVM_SETEXTENDEDLISTVIEWSTYLE LVM_DELETEALLITEMS
+LVM_GETCOLUMNORDERARRAY LVN_ITEMCHANGED LVN_COLUMNCLICK SysListView32 report multiselect arrayref hashref scrollable
+sortable reorderable on_sort on_reorder ascdesc sprintf comparator
 
 =end stopwords
 

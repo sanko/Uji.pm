@@ -15,7 +15,9 @@ below). Candidates, roughly in recommended order:
 - [ ] **Toolbar icons/labels** (lines 76-101): `TB_SETIMAGELIST`/`CImageList` + a `WIC`/`GDI+` raster
       loader so toolbar buttons stop rendering blank — this unlocks `Image` too.
 - [x] **`ListView`** (multi-column table; `SysListView32` `LVM_*` report-view, columns/rows/selection +
-      `multiple`/`full_row_select`/`grid_lines`/`header`) — shipped this milestone (see below).
+      `multiple`/`full_row_select`/`grid_lines`/`header`, header-click column sorting (`sortable`/`on_sort`),
+      header drag reorder (`reorderable`/`on_reorder`), per-column `format` for numeric cells) — shipped this
+      milestone (+ sort/reorder/format follow-up, see below).
 - [ ] **`DatePicker`** (`SysDateTimePick32` + `DTM_*`) — small and self-contained.
 - [ ] **Small widgets:** `Spinner` (activity indicator), `Spacer`, `Overlay`, `Canvas` (`on_draw`).
 - [ ] **Dark Mode auto-detection + DPI awareness** (lines 306-307).
@@ -26,13 +28,18 @@ below). Candidates, roughly in recommended order:
 ### Recently completed (this milestone)
 - [x] **`ListView`** (`SysListView32` report view): `list_view` node with `value`/`columns` (`{label,width}`,
       width measured by default)/`rows` (cell arrayrefs or `{value=>, columns=>[]}`)/`on_select` plus
-      mount-only `multiple`/`full_row_select`/`grid_lines`/`header`. Columns via `LVM_INSERTCOLUMNW`,
+      mount-only `multiple`/`full_row_select`/`grid_lines`/`header`, header-click column sorting
+      (`sortable`/`on_sort`, per-column `sort => 'text'|'numeric'`), header drag reorder
+      (`reorderable`/`on_reorder`), and per-column `format` (`'$%0.2f'`) applied to numeric cells at write
+      time. Columns via `LVM_INSERTCOLUMNW`,
       first-cell rows via `LVM_INSERTITEMW`, later cells via `LVM_SETITEMW` (NOT `LVM_SETITEMTEXTW`,
       which silently no-ops on subitems); selection via `LVM_SETITEMSTATE` (`LVIF_STATE`/`LVIS_SELECTED`,
       `LVM_ENSUREVISIBLE`), multi-select reads the native selection back via `LVM_GETITEMCOUNT`/
       `LVM_GETITEMSTATE`, `LVN_ITEMCHANGED` routed through a driver-side slot table with programmatic
-      echo suppressed. Hand-packed `LVCOLUMNW` (72B) / `LVITEMW` (88B) for Win64. See
-      `lib/Uji/Node/ListView.pm`, `t/025_list_view.t` (24 subtests), `eg/widget_list_view.pl`, and the
+      echo suppressed. Sorting rebuilds rows from a RAW-cell slot table (so formatted columns still sort
+      numerically) and preserves selection; reorder is detected by polling `LVM_GETCOLUMNORDERARRAY`.
+      Hand-packed `LVCOLUMNW` (72B) / `LVITEMW` (88B) for Win64. See
+      `lib/Uji/Node/ListView.pm`, `t/025_list_view.t` (50 subtests), `eg/widget_list_view.pl`, and the
       "Resolved Bug: list_view LVM_* constants and LVITEMW alignment" section below.
 - [x] **Subscriptions system** (`Sub`): declarative message sources reconciled by key after every render.
       `sub_interval($ms, $msg)` (periodic timer; phase preserved across renders) and `sub_on_resize($msg)`
@@ -137,7 +144,10 @@ below). Candidates, roughly in recommended order:
 
 ### Layout & Containers
 - [x] `Column` + `Row` (Flex containers with padding/spacing/alignment)
-- [x] `TabPanel` (Tabbed sub-views; `panels => [...]`, `on_select`)
+- [x] `TabPanel` (Tabbed sub-views; `panels => [...]`, `on_select
+  - [ ] vertical tabs
+  - [ ] bottom tabs (top, left, right, bottom, actually)
+  - [ ] scrolling through the list of tabs when the number of them makes the widget too broad for the container
 - [x] `ScrollView` (Clipping + scrollable region, `orientation`)
 - [x] `SplitView` (Movable divider between two panes, `orientation`)
 - [x] `GroupBox` (Labeled visual grouping of children)
@@ -145,7 +155,7 @@ below). Candidates, roughly in recommended order:
 - [ ] `Overlay` (Stack children on top of previous; e.g. badge on image)
 
 ### Data Display & Navigation
-- [x] `ListView` (Multi-column table; `columns =>`, `rows =>`, `on_select`, `multiple`/`full_row_select`/`grid_lines`/`header`; `SysListView32` `LVM_*` report view with a driver-side slot table for `LVN_ITEMCHANGED` routing) - see `lib/Uji/Node/ListView.pm`, `t/025_list_view.t`, `eg/widget_list_view.pl`
+- [x] `ListView` (Multi-column table; `columns =>`, `rows =>`, `on_select`, `multiple`/`full_row_select`/`grid_lines`/`header`, click-to-sort `sortable`/`on_sort` + header-drag `reorderable`/`on_reorder` + per-column `format`; `SysListView32` `LVM_*` report view with a driver-side slot table for `LVN_ITEMCHANGED` routing) - see `lib/Uji/Node/ListView.pm`, `t/025_list_view.t`, `eg/widget_list_view.pl`
 - [x] `TreeView` (Hierarchical data; `nodes =>`, `on_select`)
 - [x] `StatusBar` (Bottom-of-window status region)
 - [x] `Toolbar` (Row of icon/text actions)
@@ -157,6 +167,7 @@ below). Candidates, roughly in recommended order:
       separators, checked/greyed items, `WM_COMMAND` routing via the shared 0x4000+ idCommand
       allocator. No accelerators yet — main menu only. See
       `lib/Uji/Node/MenuBar.pm` + `lib/Uji/Node/MenuBar.pod`, `t/018_menu_bar.t`, `eg/widget_menu_bar.pl`.)
+- [ ] `OptionMenu` Right-click menu support with widget detection. I'd like to be able to right click a list item and it'll have a different set of options than clicking, say, a tab
 
 ### Polling & Dialogs (system-level)
 - [x] `FileOpenDialog` (Native file picker)
@@ -321,6 +332,26 @@ updates the native selection *before* `LVN_ITEMCHANGED` — the multi-select tes
 ordering. Handy truth: `Affix::raw(ptr, len)` reads control-copied buffers back, while Affix `'void*'`
 casts do not parse; and the old `0x105C` GETCOLUMNCOUNT mistake first surfaced as "columns inserted but
 colcount=0".
+
+## Resolved Bug: list_view `on_select` never fired on a real click (wrong notification constant)
+
+**Status: FIXED.** Verified with a live-posted-mouse probe (`C:\Users\r\AppData\Local\Temp\opencode\
+lvclick_probe.pl`): a real `WM_LBUTTONDOWN` on a row changes the native selection (`LVM_GETITEMSTATE`)
+but no `-102` notification ever followed; with the fix the driver dispatches `SELECT`, so the real click
+path works end-to-end. Full suite PASS (t/025 = 50 subtests).
+**Report:** in the real demo, clicking a list_view row never produced the expected `on_select` message
+(the synthetic test passed because the driver had been keying on the wrong constant).
+**Root cause:** the driver and test were matching `LVN_ITEMCHANGED = -102` — but `-102` is
+`LVN_INSERTITEM`. The genuine selection notification is `LVN_ITEMCHANGED = -101` (`LVN_FIRST - 1`, and it
+has no A/W variant). The mount-time `-104` (`LVN_DELETEALLITEMS`) / `-102` (`LVN_INSERTITEM`) notify flood
+during populate carries all-zero state, so it was silently skipped by the `LVIS_SELECTED` mask — which is
+precisely why the bug never surfaced in the tests. A real click emits `-100`/`-101` pairs (deselect the old
+row, select the new one); the driver now keys on `-101`.
+**Also fixed while in here (same session):** sortable columns (`LVN_COLUMNCLICK = -108` → `_sort_listview`
+rebuild), drag-to-reorder (`LVS_EX_HEADERDRAGDROP` + `LVM_GETCOLUMNORDERARRAY (0x103B)` poll), and
+per-column `format`. Programmatic `LVM_SETCOLUMNORDERARRAY` does NOT update what
+`LVM_GETCOLUMNORDERARRAY` reports in this environment — only a real header drag does, so the t/025
+reorder subtest drives the header with posted mouse messages.
 
 ## Testing
 - [x] Headless layout regression tests (`t/t_headless_layout.pl`: proves width tracks available space)

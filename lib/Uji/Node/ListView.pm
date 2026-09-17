@@ -6,11 +6,15 @@ class Uji::Node::ListView v0.0.1 : isa(Uji::Node) {
     field $columns         : param : reader = [];
     field $rows            : param : reader = [];
     field $on_select       : param : reader = undef;
+    field $on_sort         : param : reader = undef;
+    field $on_reorder      : param : reader = undef;
     field $multiple        : param : reader = 0;
     field $full_row_select : param : reader = 0;
     field $grid_lines      : param : reader = 0;
     field $header          : param : reader = 1;
-    method _mount_only_props { [ 'multiple', 'full_row_select', 'grid_lines', 'header' ] }
+    field $sortable        : param : reader = 0;
+    field $reorderable     : param : reader = 0;
+    method _mount_only_props { [ 'multiple', 'full_row_select', 'grid_lines', 'header', 'sortable', 'reorderable' ] }
     sub _type {'list_view'}
 };
 1;

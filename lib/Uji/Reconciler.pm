@@ -104,9 +104,14 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
-        # Check columns/rows (ListView) -- rebuild the table items when either changes.
+        # Check columns/rows (ListView) -- a columns change recreates the header (which resets widths
+        # and any drag-reordered order), so it is reconciled separately from a rows-only change, which
+        # refills the cells and leaves the user's columns alone.
         if ( $new_node->type eq 'list_view' ) {
-            if ( $self->_listview_key($old_node) ne $self->_listview_key($new_node) ) {
+            if ( $self->_columns_key($old_node) ne $self->_columns_key($new_node) ) {
+                $driver->set_prop( $new_node->id, 'columns', $new_node->columns );
+            }
+            elsif ( $self->_rows_key($old_node) ne $self->_rows_key($new_node) ) {
                 $driver->set_prop( $new_node->id, 'rows', $new_node->rows );
             }
         }
@@ -339,9 +344,23 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         return $s;
     }
 
-    # Canonical form of a list_view node's table (columns first, then every row's value + cells).
-    method _listview_key ($node) {
-        my $s = 'c' . join "\0", map { ( $_->{label} // '' ) . '|' . ( $_->{width} // '' ) } @{ $node->columns // [] };
+    # Canonical form of a list_view node's column definitions (label, width, sort mode, display format,
+    # alignment). Header-only definitions distinct from the row cells.
+    method _columns_key ($node) {
+        return join "\0", map {
+            join( '|',
+                ( $_->{label}  // '' ),
+                ( $_->{width}  // '' ),
+                ( $_->{sort}   // '' ),
+                ( $_->{format} // '' ),
+                ( $_->{align}  // '' ) )
+        } @{ $node->columns // [] };
+    }
+
+    # Canonical form of a list_view node's rows (value + every cell), so a pure rows change can be
+    # reconciled without recreating the columns.
+    method _rows_key ($node) {
+        my $s = '';
         for my $r ( @{ $node->rows // [] } ) {
             my $cells = ref $r eq 'HASH' ? $r->{columns} : $r;
             $s .= ';r' . ( ref $r eq 'HASH' ? ( $r->{value} // '' ) : '' ) . '|' . join( ',', map { '' . ( $_ // '' ) } @{ $cells // [] } );

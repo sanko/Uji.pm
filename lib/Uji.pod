@@ -181,6 +181,8 @@ ignore the event). The arguments differ per widget:
     combo_box / list_box
                 on_select -> sub ($value) { ... }   # selected option's value
     list_view   on_select -> sub ($value) { ... }   # selected row's value (arrayref with C<multiple>)
+                on_sort   -> sub ($col, $dir) { ... }   # header click (with C<sortable>)
+                on_reorder-> sub ($order) { ... }       # header drag (with C<reorderable>)
     tree_view   on_select -> sub ($value) { ... }   # selected item's value
     tab_panel   on_select -> sub ($index) { ... }   # selected panel index
 
@@ -794,7 +796,13 @@ The selected row's C<value>. With C<multiple> it is an arrayref of selected row 
 
 =item C<columns>
 
-Array reference of C<< { label => ..., width => ... } >> hashrefs. C<width> defaults to the measured label width.
+Array reference of C<< { label => ..., width => ... } >> hashrefs. C<width> defaults to the measured label width. The
+optional per-column keys: C<sort> (C<'text'> or C<'numeric'>, default C<'text'>) chooses the comparator used when the
+column is clicked (so numeric columns sort numerically even when C<formatted>), C<format> (an C<sprintf> format such as
+C<'$%0.2f'>) formats numeric cells for display (cells always C<sort> by their raw value), and C<align> (C<'left'>,
+C<'center'> or C<'right'>, default C<'left'>) picks the header-and-cell alignment. Clicking the sorted column's header
+also stamps a sort-direction glyph (C<▲> ascending / C<▼> descending) into that label, which follows the column when
+headers are drag-reordered.
 
 =item C<rows>
 
@@ -822,6 +830,26 @@ Boolean, default true. When false the column header bar is hidden.
 
 Callback receiving the selected row's C<value> (or an arrayref of them for C<multiple> tables). Returns a message (or
 C<undef>).
+
+=item C<sortable>
+
+Boolean, default false. When true clicking a column header reorders the visible rows by that column (each column's
+C<sort> key picks the comparator) and raises C<on_sort>.
+
+=item C<on_sort>
+
+Callback received after a header click: C<sub ($col, $dir)>, C<$col> the column index and C<$dir> C<'asc'>/C<'desc'>.
+See L<Uji::Node::ListView/C<on_sort>>.
+
+=item C<reorderable>
+
+Boolean, default false. When true the user can drag column headers to reorder the columns; the new order is reported
+through C<on_reorder>.
+
+=item C<on_reorder>
+
+Callback received after a column reorder: C<sub ($order)>, C<$order> the new left-to-right column indexes. See
+L<Uji::Node::ListView/C<on_reorder>>.
 
 =back
 
