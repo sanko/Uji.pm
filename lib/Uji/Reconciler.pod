@@ -91,9 +91,11 @@ parameters:
 
 =item * C<multiline> (L<Uji::Node::TextInput|Uji::Node::TextInput>, L<Uji::Node::MultilineText|Uji::Node::MultilineText>)
 
-=item * C<orientation> (L<Uji::Node::Slider|Uji::Node::Slider>)
+=item * C<orientation> (L<Uji::Node::Slider|Uji::Node::Slider>, L<Uji::Node::Separator|Uji::Node::Separator>)
 
 =item * C<align> (L<Uji::Node::Text|Uji::Node::Text>)
+
+=item * C<icon> (L<Uji::Node::SearchInput|Uji::Node::SearchInput>) - the leading glyph and edit margins are baked at creation.
 
 =item * C<label> on recreated L<Uji::Node::Text> nodes - the new STATIC is created with fresh text.
 
@@ -101,6 +103,21 @@ parameters:
 
 Recreation is issued once per node per render when at least one mount-only prop changed; the driver re-creates the
 native control, re-applies every style-affecting parameter, and repaints. See L<Uji::Driver::Win32/recreate_node>.
+
+=head1 Composed Widgets
+
+Composed widgets (C<calendar>; see L<Uji::Node::Calendar>) own no native control: they expand into a tree of
+ordinary nodes, so their children are diffed like any container's. Because those generated children get fresh,
+auto-incremented ids every render, per-cell patching is meaningless (a day cell swapping into a slot that held a
+blank spacer would inherit no HWND). The reconciler therefore diffs a calendar by its I<rendered grid>: a semantic
+key over C<month>/C<value>/C<min>/C<max> plus every cell's kind/label/enabled/background (ids excluded). Any change
+tears down the cell subtree and re-mounts it from the new grid - a few dozen tiny controls, so the cost is trivial.
+
+C<overlay> (see L<Uji::Node::Overlay>) is different: its layers are diffed normally, but after the
+child loop the driver's C<_apply_overlay> re-raises every layer in array order. Native Win32 sibling
+creation order puts the first-created window on top, which is the OPPOSITE of an overlay's "later
+children draw over earlier ones" contract, so the raise is re-run whenever children are added or
+removed (idempotent when nothing changed).
 
 =head1 How it Works
 

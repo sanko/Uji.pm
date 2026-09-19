@@ -12,7 +12,7 @@ use Encode qw[decode encode];
 #
 skip_all 'Win32 only' unless $^O eq 'MSWin32';
 
-# ─── utf8everywhere boundary contract ────────────────────────────────────
+#  utf8everywhere boundary contract
 # Perl strings may arrive as bare UTF-8 octets (no utf8 flag -- the default for literals in a
 # source without `use utf8`, and for file data) or as flagged character strings. The drivers
 # normalise both to Unicode at the WString boundary (_nz) and return decoded Unicode on reads.
@@ -26,7 +26,7 @@ $drv->init($chan);
 my $ellipsis_octets = "\xE2\x80\xA6";                    # "…" WITHOUT the utf8 flag
 my $ellipsis        = decode( 'UTF-8', $ellipsis_octets );    # flagged U+2026
 
-# ── 1. Button label: raw UTF-8 octets round-trip to the real character ──
+#  1. Button label: raw UTF-8 octets round-trip to the real character
 my $vt = Uji::window(
     title => 'utf8',
     w     => 320,
@@ -57,7 +57,7 @@ sub hwnd_text ($id) {
 is hwnd_text(101), 'Open' . $ellipsis, 'button label: raw UTF-8 octets render the real ellipsis';
 is hwnd_text(102), 'Save' . $ellipsis, 'static text: raw UTF-8 octets render the real ellipsis';
 
-# ── 2. Window title: raw UTF-8 octets ────────────────────────────────────
+#  2. Window title: raw UTF-8 octets
 {
     my $vt2 = Uji::window( title => $ellipsis_octets, w => 200, h => 100, child => Uji::column() );
     $drv->mount($vt2);
@@ -71,7 +71,7 @@ is hwnd_text(102), 'Save' . $ellipsis, 'static text: raw UTF-8 octets render the
     Uji::Driver::Win32::SendMessageW( $rec->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE
 }
 
-# ── 3. measure_text normalises before measuring (octets == characters) ───
+#  3. measure_text normalises before measuring (octets == characters)
 {
     my ( $wo, $ho ) = $drv->measure_text($ellipsis_octets);
     my ( $w,  $h )  = $drv->measure_text($ellipsis);
@@ -80,7 +80,7 @@ is hwnd_text(102), 'Save' . $ellipsis, 'static text: raw UTF-8 octets render the
     ok $w < 40, 'ellipsis measures like one glyph, not three Latin-1 letters';
 }
 
-# ── 4. Text input value: characters round-trip through the native edit ───
+#  4. Text input value: characters round-trip through the native edit
 {
     my $vt3 = Uji::window(
         title => 'utf8-edit',

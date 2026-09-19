@@ -50,6 +50,21 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         $new_node->set_id( $old_node->id );
         $driver->update_registry($new_node);
 
+        # Calendar is a COMPOSED widget: it expands into a generated cell grid under a container
+        # node (header buttons, weekday labels, ~6 x 7 day cells), and each render re-expands it
+        # with freshly allocated child ids. Element-wise patching of those generated ids is
+        # meaningless (a day cell swapping into an old blank slot would inherit no HWND), so the
+        # whole cell subtree is torn down and re-mounted whenever the rendered GRID changes
+        # (semantic key: month/value/min/max + every cell's kind/label/enabled/highlight, ids
+        # excluded). Cheap: ~60 tiny controls.
+        if ( $old_node->type eq 'calendar' && $new_node->type eq 'calendar' && $self->_calendar_key($old_node) ne $self->_calendar_key($new_node) ) {
+            $driver->unmount_subtree($_) for @{ $old_node->children };
+            for my $row ( @{ $new_node->children } ) {
+                $driver->mount_subtree( $row, $ctx ) if $driver->can('mount_subtree');
+            }
+            return;
+        }
+
         # Mount-only props (multiline, orientation, align): if any changed, the native control
         # must be destroyed and recreated from scratch. The ID is transferred so the registry
         # entry is updated. We do NOT return here: the remaining prop diffs are idempotent
@@ -153,7 +168,7 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
-        # Check range (Slider)
+        # Check range / step (Slider, SpinBox)
         if ( $old_node->can('min') && $old_node->can('max') ) {
             if ( $old_node->min ne $new_node->min ) {
                 $driver->set_prop( $new_node->id, 'min', $new_node->min );
@@ -162,8 +177,6 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
                 $driver->set_prop( $new_node->id, 'max', $new_node->max );
             }
         }
-
-        # Check step (Slider)
         if ( $old_node->can('step') && $old_node->step ne $new_node->step ) {
             $driver->set_prop( $new_node->id, 'step', $new_node->step );
         }
@@ -171,6 +184,49 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         # Check enabled (all widgets)
         if ( $old_node->can('enabled') && ( $old_node->enabled // 0 ) != ( $new_node->enabled // 0 ) ) {
             $driver->set_prop( $new_node->id, 'enabled', $new_node->enabled );
+        }
+
+        # Check spinner animation props (running / speed / size / color): set_prop re-generates the
+        # frame set from the node and re-arms/disarms the WM_TIMER, so toggling running freezes or
+        # resumes the animation on the SAME control without a remount (speed retunes the interval).
+        if ( $new_node->type eq 'spinner' ) {
+            for my $p (qw[ running speed size color ]) {
+                if ( ( $old_node->$p // '' ) ne ( $new_node->$p // '' ) ) {
+                    $driver->set_prop( $new_node->id, $p, $new_node->$p );
+                }
+            }
+        }
+
+        # Check image picture props (src / object_fit): set_prop re-rasters the source into the
+        # widget's box, so swapping the picture keeps the same control (and id).
+        if ( $new_node->type eq 'image' ) {
+            for my $p (qw[ src object_fit ]) {
+                if ( ( $old_node->$p // '' ) ne ( $new_node->$p // '' ) ) {
+                    $driver->set_prop( $new_node->id, $p, $new_node->$p );
+                }
+            }
+        }
+
+        # Check canvas draw props (on_draw / redraw): a changed callback or bumped redraw
+        # forces a repaint of the (kept) control without a remount.
+        if ( $new_node->type eq 'canvas' ) {
+            if ( ( $old_node->on_draw // '' ) ne ( $new_node->on_draw // '' ) ) {
+                $driver->set_prop( $new_node->id, 'on_draw', $new_node->on_draw );
+            }
+            if ( ( $old_node->redraw // 0 ) != ( $new_node->redraw // 0 ) ) {
+                $driver->set_prop( $new_node->id, 'redraw', $new_node->redraw );
+            }
+        }
+
+        # Check colour-button props (color / show_hex): a changed swatch colour repaints
+        # the owner-drawn button in place; on_change is resolved fresh by the driver on
+        # every click (update_registry), so it needs no diff.
+        if ( $new_node->type eq 'color_button' ) {
+            for my $p (qw[ color show_hex ]) {
+                if ( ( $old_node->$p // '' ) ne ( $new_node->$p // '' ) ) {
+                    $driver->set_prop( $new_node->id, $p, $new_node->$p );
+                }
+            }
         }
 
         # Check visible (all widgets)
@@ -290,6 +346,13 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
+        # Overlay: array order IS the stacking order (later layers on top). Win32 stacks the
+        # first-created sibling on top, so after any children were added/removed, re-raise each
+        # layer in array order (idempotent when nothing changed) so the stack stays correct.
+        if ( $new_node->type eq 'overlay' && $driver->can('_apply_overlay') ) {
+            $driver->_apply_overlay($new_node);
+        }
+
         # ScrollView: rows added/removed during this render change the content rect, but the
         # scroll_view itself FILLS its parent, so its own bounds are unchanged and the generic
         # bounds diff above never re-drives move_widget. Only a window resize did (WM_SIZE ->
@@ -324,6 +387,24 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         }
     }
 
+    # Canonical form of a composed calendar's rendered grid: the month inputs plus every cell's
+    # kind/label/enabled/background (ids excluded, since auto-generated ids change per render).
+    method _calendar_key ($node) {
+        my $k = join "\0", ( $node->month // '' ), ( $node->value // '' ), ( $node->min // '' ), ( $node->max // '' );
+        for my $row ( @{ $node->children } ) {
+            $k .= "\0[";
+            for my $cell ( @{ $row->children } ) {
+                $k
+                    .= "\0" .
+                    $cell->type . '|' .
+                    ( $cell->can('label') ? ( $cell->label // '' ) : '' ) . '|' .
+                    ( $cell->enabled    // '' ) . '|' .
+                    ( $cell->background // '' );
+            }
+        }
+        return $k;
+    }
+
     # Canonical form of a node's options (value|label pairs joined by NUL).
     method _opts_key ($node) {
         return join "\0", map { ( $_->{value} // '' ) . '|' . ( $_->{label} // '' ) } @{ $node->options // [] };
@@ -347,14 +428,9 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
     # Canonical form of a list_view node's column definitions (label, width, sort mode, display format,
     # alignment). Header-only definitions distinct from the row cells.
     method _columns_key ($node) {
-        return join "\0", map {
-            join( '|',
-                ( $_->{label}  // '' ),
-                ( $_->{width}  // '' ),
-                ( $_->{sort}   // '' ),
-                ( $_->{format} // '' ),
-                ( $_->{align}  // '' ) )
-        } @{ $node->columns // [] };
+        return join "\0",
+            map { join( '|', ( $_->{label} // '' ), ( $_->{width} // '' ), ( $_->{sort} // '' ), ( $_->{format} // '' ), ( $_->{align} // '' ) ) }
+            @{ $node->columns // [] };
     }
 
     # Canonical form of a list_view node's rows (value + every cell), so a pure rows change can be
@@ -373,7 +449,7 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         return ref $value eq 'ARRAY' ? join "\0", map { '' . ( $_ // '' ) } @$value : '' . ( $value // '' );
     }
 
-    # Canonical form of a toolbar node's buttons list (label|id|separator|checked|enabled).
+    # Canonical form of a toolbar node's buttons list (label|id|separator|checked|enabled|width|icon).
     method _buttons_key ($node) {
         return join "\0", map {
             ref $_ eq 'HASH' ?
@@ -383,7 +459,8 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
                 ( $_->{separator}       ? 's'                           : '' ),
                 ( $_->{checked}         ? 'c'                           : '' ),
                 ( defined $_->{enabled} ? ( $_->{enabled} ? 'e' : 'd' ) : '' ),
-                ( $_->{width} // '' ) ) :
+                ( $_->{width} // '' ),
+                ( $_->{icon}  // '' ) ) :
                 ''
         } @{ $node->buttons // [] };
     }

@@ -1,0 +1,97 @@
+=pod
+
+=head1 NAME
+
+Uji::Draw - the portable drawing vocabulary for Uji::Node::Canvas
+
+=head1 SYNOPSIS
+
+    my $d;                 # handed to you by the driver; see DESCRIPTION
+    $d->clear('#FFFFFF');          # erase-space background
+    $d->color('#3366FF');          # stroke and fill colour
+    $d->width(3);                  # stroke width
+    $d->antialias(1);              # smoothing (on by default)
+    $d->rect( 2, 2, $d->size );    # rectangle outline
+    $d->fill_rect( 10, 10, 40, 30 );
+    $d->line( 0, 0, 31, 19 );
+    $d->ellipse( 50, 20, 40, 40 );    # outline
+    $d->fill_ellipse( 90, 50, 70, 70 );
+    $d->arc( 60, 50, 40, 30, 0, 180 );      # outline arc
+    $d->fill_pie( 60, 50, 40, 30, 45, 90 ); # pie wedge
+
+=head1 DESCRIPTION
+
+C<Uji::Draw> is the object handed to a canvas C<on_draw> callback. It is a thin,
+stateful drawing session: I<colour> and I<width> persist across calls, and every
+primitive is drawn immediately. Shapes take explicit C<(x, y, w, h)> rects (a bare
+C<[$w, $h]> in list context works for the full box) plus, for arcs and pies, a
+C<start> and C<sweep> angle in degrees.
+
+This class is the PLATFORM-NEUTRAL half of the drawing stack: it owns the state a
+callback sets and reads (colour, pen width, antialiasing, the box size) and defines
+the primitive vocabulary. The pixels themselves come from a per-platform
+I<implementation> - L<Uji::Draw::Win32> is the GDI+ one used by the Win32 driver,
+and GTK4/Cocoa backends will arrive with those drivers. A driver constructs its
+implementation and passes it to the callback, so the code written inside C<on_draw>
+stays portable verbatim (it never mentions a platform library).
+
+Everything is double-buffered behind the scenes by the driver, so a busy scene
+still swaps without flicker.
+
+=head1 METHODS
+
+The driver owns the constructor (C<new>); an app callback normally never calls it,
+and the constructor signature is platform-specific (see L<Uji::Draw::Win32>).
+L<size> is the one introspection method a callback is most likely to use.
+
+=over 4
+
+=item * C<< size >> - list C<($w, $h)> of the drawable box.
+
+=item * C<clear($hex)> - fill the whole box with the colour.
+
+=item * C<color($hex)> / C<< color >> - set or read the current stroke/fill colour.
+
+=item * C<width($n)> / C<< width >> - set or read the stroke width (default 1).
+
+=item * C<antialias($bool)> / C<< antialias >> - turn smoothing on/off (on when
+the session starts). The platform implementation translates it (GDI+ smoothing
+modes, Cairo antialiasing, ...).
+
+=item * C<line($x1, $y1, $x2, $y2)>
+
+=item * C<rect($x, $y, $w, $h)> - outline; C<fill_rect> fills.
+
+=item * C<ellipse($x, $y, $w, $h)> - outline; C<fill_ellipse> fills.
+
+=item * C<arc($x, $y, $w, $h, $start, $sweep)> - outline arc; C<fill_pie> fills the
+wedge. Angles are degrees, measured from 3 o'clock counter-clockwise.
+
+=back
+
+Where a C<($w, $h)> alone is allowed (the plane of a rect/ellipse) pass
+C<< $d->size >> directly in list context, e.g. C<< $d->rect( 2, 2, $d->size ) >>.
+
+=head1 COLOURS
+
+Colours are the same C<'#RRGGBB'> strings used across Uji. The base maps them to a
+packed ARGB value (opaque alpha top byte) as the canonical form every
+implementation starts from; a backend translates that to its native colour (GDI+
+eats the ARGB as-is, Cairo wants 0..1 RGBA, ...). There is no platform-dependent
+byte-ordering trick - what you see is what the backend composites.
+
+=head1 PLATFORM CONTRACT
+
+An implementation subclasses C<Uji::Draw> and supplies the primitives the public
+methods dispatch to: C<_clear>, C<_line>, C<_rect>, C<_fill_rect>, C<_ellipse>,
+C<_fill_ellipse>, C<_arc>, C<_fill_pie> and (optionally) C<_apply_smoothing>.
+The base die()s with a clear message if a platform forgets one, so a missing
+backend is loud at draw time rather than silently blank.
+
+=head1 SEE ALSO
+
+L<Uji::Node::Canvas> for the widget that hands a C<Uji::Draw> to the callback,
+L<Uji::Draw::Win32> for the GDI+ implementation,
+L<Uji::Node> for the shared node surface.
+
+=cut

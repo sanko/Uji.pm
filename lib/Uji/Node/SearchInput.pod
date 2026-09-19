@@ -1,0 +1,90 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::SearchInput - a search field with an icon glyph and a clear button
+
+=head1 SYNOPSIS
+
+    Uji::search_input(
+        placeholder => 'Find…',
+        icon        => 'data:image/png;base64,iVBOR…',    # optional leading magnifier
+        value       => '',
+        on_input    => sub ($txt) { { type => 'QUERY', text => $txt } },
+        on_search   => sub ($txt) { { type => 'SEARCH', text => $txt } },
+    );
+
+=head1 DESCRIPTION
+
+A single-line C<EDIT> with search-box conveniences: an optional leading icon glyph and a trailing
+C<✕> clear button. Typing fires C<on_input> with the current text (Win32 C<EN_CHANGE>); clicking
+C<✕> empties the field, hides the button, refocuses the edit, and fires C<on_search('')> so the
+model can re-run the (now empty) query.
+
+The icon uses the same GDI+ raster loader as toolbar buttons (a C<data:image/...> URI), so it
+inherits its C<(spec@size)> cache. The edit's margins (C<EM_SETMARGINS>) reserve the icon strip and
+the 20px clear-button zone, so text and caret never run underneath them.
+
+=head2 Parameters
+
+=over
+
+=item C<value>
+
+The current query text (default C<''>). Programmatic changes show/hide the clear button.
+
+=item C<placeholder>
+
+Grey hint text shown while the field is empty.
+
+=item C<icon>
+
+Optional C<data:image/...> URI for a 16px leading glyph. B<Mount-only>: changing it destroys and
+recreates the control.
+
+=item C<on_input>
+
+C<sub ($text)>, fired on every keystroke. Return a message hashref (put on the channel) or C<undef>.
+
+=item C<on_search>
+
+C<sub ($text)>, fired when C<✕> clears the field. (Enter-key submission is not yet wired; pair the
+field with a "Search" button in the model instead.)
+
+=back
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<search_input>)
+
+=item * L<Uji::Node::TextInput> - the plain single-line field
+
+=item * L<Uji::Driver::Win32> - the EDIT/aux implementation
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+magnifier keystroke glyph sub C<on_input C<on_search
+
+=end stopwords
+
+=cut

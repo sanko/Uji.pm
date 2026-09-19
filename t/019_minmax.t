@@ -120,4 +120,40 @@ sub send_minmax_info ( $hwnd, $min_track = undef, $max_track = undef ) {
     Uji::Driver::Win32::SendMessageW( $rec->{hwnd}, $WM_CLOSE, 0, 0 );
 }
 #
+
+#  6. REGRESSION (reported live): a SHRINKING constraint added after mount must snap the client
+#     box down AND deliver that clamp to the app resize handler - the handoff that re-flows
+#     children. t/019 previously only asserted the WM_GETMINMAXINFO track clamps, never the
+#     resize-handler handoff, so a driver that clamps the frame but skips the handler went green
+#     while its children were never re-laid-out into the new client box.
+{
+    my $col6   = Uji::column( padding => 8, children => [ Uji::text("hi") ] );
+    my $vx6    = Uji::window( id => "mm_dn", title => "MMDN", w => 900, h => 400, child => $col6 );
+    $drv->mount($vx6);
+    my $layout6 = Uji::Layout->new( driver => $drv );
+    $layout6->compute( $vx6, 0, 0, 900, 400 );
+    $drv->mount_children($vx6);
+    my $rec6 = $drv->_get_registry_record( $vx6->id );
+    my @fired;
+    $drv->set_resize_handler( sub { push @fired, [ @_[ 1, 2 ] ] } );
+
+    # Bring in a SHRINKING max_w (350 over a 900 client) - the reconciler seam that patches the
+    # constraint live per Uji.pm Reconciler constraint propagation.
+    my $col6b   = Uji::column( padding => 8, children => [ Uji::text("hi") ] );
+    my $vx6b    = Uji::window( id => "mm_dn2", title => "MMDN2", w => 900, h => 400, max_w => 350, child => $col6b );
+    my $layout6b = Uji::Layout->new( driver => $drv );
+    $layout6b->compute( $vx6b, 0, 0, 900, 400 );
+    my $recon6 = Uji::Reconciler->new;
+    $recon6->patch( $vx6, $vx6b, $drv );
+
+    my @vx6 = send_minmax_info( $rec6->{hwnd} );
+    ok $vx6[2] < 20000, "shrinking max_w clamps the live track x (got $vx6[2] < 20000)" if defined $vx6[2];
+    ok scalar(@fired), "SHRINKING constraint DELIVERS the resize handler (children re-layout seam)";
+    if (@fired) {
+        my $last = $fired[-1];
+        ok $last->[0] <= 350, "handler got the clamped client w (got $last->[0] <= 350)";
+    }
+    Uji::Driver::Win32::SendMessageW( $rec6->{hwnd}, $WM_CLOSE, 0, 0 );
+}
+
 done_testing;

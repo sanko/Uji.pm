@@ -54,7 +54,7 @@ sub class_of {
     return $cls;
 }
 
-# ─── status_text: STATIC with the align style baked in at mount ───
+# status_text: STATIC with the align style baked in at mount
 is lc class_of( $str->{hwnd} ), 'static', 'status_text is a STATIC control';
 ok Uji::Driver::Win32::GetWindowLongW( $str->{hwnd}, -16 ) & 0x0001, 'status_text has SS_CENTER from align';
 $drv->set_prop( $st->id, 'label', 'Busy...' );
@@ -66,7 +66,7 @@ my $label = decode( 'UTF-16LE', Affix::raw( $buf, $len * 2 ) );
 is $label, 'Busy...', 'set_prop label updates a status_text';
 free($buf);
 
-# ─── status_bar: panes + parts ───
+#  status_bar: panes + parts
 is lc class_of( $sbr->{hwnd} ),                                    'msctls_statusbar32', 'status_bar is a native statusbar';
 is Uji::Driver::Win32::SendMessageW( $sbr->{hwnd}, 0x0406, 0, 0 ), 2,                    'status_bar has two parts';           # SB_GETPARTS
 {
@@ -105,7 +105,7 @@ $drv->move_widget( $sbar->id, $sbar->bx, $sbar->by, 600, $sbar->bh );
     is $edges[1], int( 1200 / 3 ), 'status_bar repart edge 2 tracks the new width';
 }
 
-# ─── group_box: BUTTON frame + sibling-mounted children in the title band ───
+# group_box: BUTTON frame + sibling-mounted children in the title band
 is lc class_of( $gbr->{hwnd} ), 'button', 'group_box is a BUTTON control';
 ok Uji::Driver::Win32::GetWindowLongW( $gbr->{hwnd}, -16 ) & 0x0007, 'group_box has BS_GROUPBOX style';
 ok $go->by >= $gb->by + 16,                                          'group_box content starts inside the title band';
@@ -124,7 +124,7 @@ my $gmsg = $chan->size ? $chan->get : undef;
 ok $gmsg, 'group_box button click reached the app wndproc';
 is $gmsg && $gmsg->{type}, 'GO', 'group_box child notifications route to the model';
 
-# ─── scroll_view: viewport class, shared store, positioning ───
+#  scroll_view: viewport class, shared store, positioning
 is class_of( $svr->{hwnd} ) =~ /^UjiViewportClass/, 1, 'scroll_view mounts the dedicated viewport class';
 ok $b0r && $b0r->{scroll} && $b0r->{scroll} == $svr->{scroll}, 'content shares the scroll_view scroll store';
 my $win_rect = Affix::malloc(16);
@@ -180,7 +180,7 @@ is $svr->{scroll}{oy}, 40, 'set_prop scroll_x left the y offset alone';
 $drv->set_prop( $sv->id, 'scroll_y', 0 );
 is $drv->_scrollbar_read_pos( $svr->{aux_v} ), 0, 'set_prop scroll_y reset the thumb';
 
-# ─── mouse wheel: WM_MOUSEWHEEL must scroll the viewport under the cursor ───
+#  mouse wheel: WM_MOUSEWHEEL must scroll the viewport under the cursor
 # The wheel arrives at the focused top-level window; the driver routes it to the scroll_view
 # whose viewport/scrollbar contains the cursor point (lParam). oy starts at 0.
 {

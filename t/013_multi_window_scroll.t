@@ -164,7 +164,7 @@ $walk2 = sub ($n) {
 $walk2->($vwin3);
 is $leftover, 0, 'removed rows left no registry records behind';
 
-# ─── bug regression: appended rows must grow the scroll range immediately (no window resize) ───
+#  bug regression: appended rows must grow the scroll range immediately (no window resize)
 # Before the fix, _place_scrollbars only ran from move_widget; the plain render path never invoked
 # it for a scroll_view whose own (fill) bounds were unchanged, so the range stayed stale until a
 # window resize forced _relayout_now against the LIVE tree. Overflow the viewport by appending,
@@ -198,7 +198,7 @@ sub viewer_range ($vnode) {
     ok $r_g > $r_f, 'adding a row grows the scroll range without a window resize';
 }
 
-# ─── scrollbar geometry: bar spans the viewport, page matches viewport height ───
+#  scrollbar geometry: bar spans the viewport, page matches viewport height
 {
     my $sv;
     my $walk;

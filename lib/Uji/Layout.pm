@@ -5,7 +5,7 @@ class Uji::Layout v0.0.1 {
 
     # Types whose default height is the parent's cell (they are structural containers, not leaves).
     sub _is_container ($type) {
-        return $type eq 'column' || $type eq 'row' || $type eq 'group_box' || $type eq 'scroll_view' || $type eq 'split_view' || $type eq 'tab_panel' || $type eq 'tree_view' || $type eq 'list_view';
+        return $type eq 'column' || $type eq 'row' || $type eq 'group_box' || $type eq 'scroll_view' || $type eq 'split_view' || $type eq 'tab_panel' || $type eq 'tree_view' || $type eq 'list_view' || $type eq 'calendar' || $type eq 'overlay';
     }
 
     # Clamp a computed extent against a min/max constraint (0 = unconstrained).
@@ -35,7 +35,7 @@ class Uji::Layout v0.0.1 {
         return _clamp( $node->h, $node->min_h, $node->max_h ) if $node->h;
         my ( undef, $nh ) = $self->_natural($node);
         my $fh     = $node->fit_policy('h');
-        my $fill_h = defined $fh && $fh eq 'fill' ? 1 : defined $fh && $fh eq 'content' ? 0 : _is_container( $node->type ) ? 1 : 0;
+        my $fill_h     = defined $fh && $fh eq 'fill' ? 1 : defined $fh && $fh eq 'content' ? 0 : ( _is_container( $node->type ) || $node->type eq 'spacer' || $node->type eq 'separator' ) ? 1 : 0;
         return $fill_h ? $cell : $nh;
     }
 
@@ -54,6 +54,61 @@ class Uji::Layout v0.0.1 {
     # Natural (content) size of a node measured through the driver
     method _intrinsic ($node) {
         my $t = $node->type;
+
+        # Spacer: invisible flexible whitespace, zero intrinsic box (its extent comes fully from the
+        # parent's flex distribution, so the (100,30) default fallback must never see it).
+        return ( 0, 0 ) if $t eq 'spacer';
+
+        # Separator: a thin etched rule (STATIC SS_ETCHED*). Its intrinsic box is just the line
+        # thickness on the perpendicular axis; the rule spans the container cross axis via the
+        # fill defaults below (horizontal in a column, vertical in a row).
+        if ( $t eq 'separator' ) {
+            my $vert = ( $node->orientation // 'horizontal' ) eq 'vertical';
+            return $vert ? ( 3, 0 ) : ( 0, 3 );
+        }
+
+        # Spinner: a square activity indicator, the node's `size` is its box on both axes.
+        return ( ( $node->size // 24 ) x 2 ) if $t eq 'spinner';
+
+        # Canvas: a raw 2D drawing surface. Default box is (200, 100) when no explicit
+        # w/h is given; the drawing callback sizes to the laid-out box.
+        if ( $t eq 'canvas' ) {
+            return ( $node->w || 200, $node->h || 100 );
+        }
+
+        # Image: natural raster size via the driver seam (mock drivers fall back to a 64x64
+        # placeholder). When one axis is EXPLICIT the other follows the aspect below, and _natural
+        # re-applies the explicit h/w override AFTER that, so the ratio is kept for the free axis.
+        if ( $t eq 'image' ) {
+            my ( $nw, $nh ) = $driver && $driver->can('measure_image') ? $driver->measure_image( $node->src // '' ) : ( 64, 64 );
+            ( $nw, $nh ) = ( 64, 64 ) unless $nw && $nh;
+            if ( $node->w && !$node->h ) {
+                $nh = int( $nh * $node->w / $nw );
+            }
+            elsif ( $node->h && !$node->w ) {
+                $nw = int( $nw * $node->h / $nh );
+            }
+            return ( $nw, $nh );
+        }
+
+        # ColorButton: a swatch button. Intrinsic box = a 16x16 swatch plus (when
+        # show_hex) a gap + the hex text, with a small padding ring; the axis height
+        # nests a 22px button face minimum.
+                # ColorButton: an inline colour well - swatch square (16x16) plus, when show_hex, a gap
+        # and the '#RRGGBB' text; the button face nests 22px. The swatch colour comes from the
+        # base node's `color` field (reader), the label from `show_hex`.
+        if ( $t eq 'color_button' ) {
+            my $hex = '' . ( $node->color // '#000000' );
+            my $tw  = 0;
+            my $th  = 16;
+            if ( $node->show_hex ) {
+                ( $tw, $th ) = $driver && $driver->can('measure_text')
+                    ? $driver->measure_text($hex)
+                    : ( CORE::length($hex) * 8, 16 );
+            }
+            return ( 3 + 3 + 16 + ( $node->show_hex ? 3 + 6 + $tw : 0 ) + 3, 22 );
+        }
+
         if ( $t eq 'text' || $t eq 'button' ) {
             my $label = '' . ( $node->label // '' );
             my ( $tw, $th ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
@@ -98,6 +153,17 @@ class Uji::Layout v0.0.1 {
                 return ( $tw < 80 ? 80 : $tw, $lines * 20 );
             }
             return ( $tw < 80 ? 80 : $tw, 20 );
+        }
+        if ( $t eq 'search_input' ) {
+            my $val = '' . ( $node->value // '' );
+            my $tw  = length $val ? ( $driver && $driver->can('measure_text') ? ( $driver->measure_text($val) )[0] : length($val) * 8 ) : 80;
+
+            # +16 EDIT inner padding, +28 leading icon + gap when an icon is set, +22 clear-button
+            # strip. Single-line, so the natural height is a 24px field (aligned with buttons).
+            $tw += 16;
+            $tw += 28 if $node->icon;
+            $tw += 22;
+            return ( $tw < 100 ? 100 : $tw, 24 );
         }
         if ( $t eq 'multiline_text' ) {
             my $val = '' . ( $node->value // '' );
@@ -217,6 +283,7 @@ class Uji::Layout v0.0.1 {
         }
         if ( $t eq 'toolbar' ) {
             my $w = 0;
+            my $is = $node->icon_size // 16;
             for my $b ( @{ $node->buttons // [] } ) {
                 if ( $b->{separator} ) {
                     $w += $b->{width} // 6;
@@ -224,7 +291,7 @@ class Uji::Layout v0.0.1 {
                 }
                 my $label = '' . ( $b->{label} // '' );
                 my ( $tw, $th ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
-                $w += $tw + 16;    # per-button horizontal padding
+                $w += $tw + 16 + ( $b->{icon} ? $is + 4 : 0 );    # per-button horizontal padding (+ icon + 4px gap)
             }
             return ( ( $w + 8 ) < 80 ? 80 : $w + 8, 28 );
         }
@@ -243,6 +310,23 @@ class Uji::Layout v0.0.1 {
             $n = 1 if $n < 1;
             $n = 8 if $n > 8;    # at most ~8 rows visible before the list scrolls
             return ( $w ? $w : 100, ( $n * 22 ) + 20 );    # +20 for the column header band
+        }
+        if ( $t eq 'calendar' ) {
+            # Composed month grid: ◀ title ▶ header (~24) + weekday letters (~18) + six day rows
+            # (~22 each) inside padding 8, with 2px row spacing.
+            return ( 232, 200 );
+        }
+        if ( $t eq 'overlay' ) {
+            # Layers stacked in the same box: the intrinsic size is the largest child box.
+            my $children = $node->children;
+            my $pad      = $node->can('padding') ? $node->padding : 0;
+            my ( $max_w, $max_h ) = ( 0, 0 );
+            for my $child (@$children) {
+                my ( $cw, $ch ) = $self->_natural($child);
+                $max_w = $cw if $cw > $max_w;
+                $max_h = $ch if $ch > $max_h;
+            }
+            return ( $max_w + ( $pad * 2 ), $max_h + ( $pad * 2 ) );
         }
         return ( 100, 30 );
     }
@@ -271,7 +355,7 @@ class Uji::Layout v0.0.1 {
             # and falls back to its intrinsic height.
             my $fh     = $node->fit_policy('h');
             my $flex   = $node->flex // 0;
-            my $fill_h = ( $main eq 'h' && $flex > 0 ) ? 1 : defined $fh && $fh eq 'fill' ? 1 : defined $fh && $fh eq 'content' ? 0 : $is_container ? 1 : 0;
+            my $fill_h = ( $main eq 'h' && $flex > 0 ) ? 1 : defined $fh && $fh eq 'fill' ? 1 : defined $fh && $fh eq 'content' ? 0 : ( $is_container || $node->type eq 'spacer' || $node->type eq 'separator' ) ? 1 : 0;
             $h = $node->h ? $node->h : $fill_h ? $avail_h : $nh;
             $h = _clamp( $h, $node->min_h, $node->max_h );
         }
@@ -313,6 +397,35 @@ class Uji::Layout v0.0.1 {
         }
         elsif ( $node->type eq 'tab_panel' ) {
             $self->_layout_tab( $node, $start_x, $start_y, $w, $h );
+        }
+        elsif ( $node->type eq 'calendar' ) {
+            $self->_layout_flex( $node, 'vertical', $start_x, $start_y, $w, $h );
+        }
+        elsif ( $node->type eq 'overlay' ) {
+            $self->_layout_overlay( $node, $start_x, $start_y, $w, $h );
+        }
+    }
+
+    # Overlay: every child is a LAYER placed over the previous one in the same plane.
+    # Each layer sizes itself by the usual width/height rules (explicit, fit =>
+    # 'content', container fill) and is offset within the inner box by its align_w/
+    # align_h. The DRIVER turns "array order" into stacking (later layers on top).
+    method _layout_overlay ( $node, $x, $y, $w, $h ) {
+        my $children = $node->children;
+        return unless @$children;
+        my $pad = $node->can('padding') ? $node->padding : 0;
+        my $ix  = $x + $pad;
+        my $iy  = $y + $pad;
+        my $iw  = $w - ( $pad * 2 );
+        my $ih  = $h - ( $pad * 2 );
+        for my $child (@$children) {
+            my $cw = $self->_cross_size( $child, 'w', $iw );
+            my $ch = $self->_cross_size( $child, 'h', $ih );
+            my $ox = int( _align_frac( $child->align_policy('w') ) * ( $iw - $cw ) );
+            my $oy = int( _align_frac( $child->align_policy('h') ) * ( $ih - $ch ) );
+            $ox = 0 if $ox < 0;
+            $oy = 0 if $oy < 0;
+            $self->compute( $child, $ix + $ox, $iy + $oy, $iw, $ih, 'h' );
         }
     }
 
@@ -437,10 +550,26 @@ class Uji::Layout v0.0.1 {
                 $cy += $child->bh + $spc;
             }
             else {
-                my $cross = $self->_cross_size( $child, 'h', $inner_h );
+                # A spacer's cross box matches the tallest sibling box instead of blowing up to the
+                # full row height via the default fill rule. The cell is what each sibling's own
+                # cross size resolves to (fill/container siblings get the cell); an all-spacer row
+                # falls back to the cell. This cell is then passed straight to compute() below so
+                # the spacer's height cannot re-inflate to $inner_h.
+                my $cell = $child->type eq 'spacer'
+                    ? do {
+                        my $mx = 0;
+                        for my $c ( @$children ) {
+                            next if $c->type eq 'spacer';
+                            my $ch = $self->_cross_size( $c, 'h', $inner_h );
+                            $mx = $ch if $ch > $mx;
+                        }
+                        $mx || $inner_h;
+                    }
+                    : $inner_h;
+                my $cross = $self->_cross_size( $child, 'h', $cell );
                 my $off   = int( _align_frac( $child->align_policy('h') ) * ( $inner_h - $cross ) );
                 $off = 0 if $off < 0;
-                $self->compute( $child, $cx, $cy + $off, $main_size, $inner_h, 'w' );
+                $self->compute( $child, $cx, $cy + $off, $main_size, $cross, 'w' );
                 $cx += $child->bw + $spc;
             }
         }

@@ -12,7 +12,7 @@ skip_all 'Win32 only' unless $^O eq 'MSWin32';
 my $drv = Uji::Driver::Win32->new;
 $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
 
-# ── 1. Filter string: "Label|*.ext|All|*.*" form ─────────────────────────
+#  1. Filter string: "Label|*.ext|All|*.*" form
 {
     my $blob = $drv->_ofn_filter_string("Text|*.txt|All|*.*");
     my $utf8 = encode( 'UTF-8', decode( 'UTF-16LE', $blob ) );
@@ -21,20 +21,20 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     is $utf8, "Text\x00*.txt\x00All\x00*.*\x00\x00", 'string filter builds double-NUL pair blob';
 }
 
-# ── 2. Filter string: arrayref-of-pairs form ─────────────────────────────
+#  2. Filter string: arrayref-of-pairs form
 {
     my $blob = $drv->_ofn_filter_string( [ [ 'Perl', '*.pl' ], [ 'All', '*.*' ] ] );
     my $utf8 = encode( 'UTF-8', decode( 'UTF-16LE', $blob ) );
     is $utf8, "Perl\x00*.pl\x00All\x00*.*\x00\x00", 'arrayref filter builds double-NUL pair blob';
 }
 
-# ── 3. Filter string: default when omitted ───────────────────────────────
+#  3. Filter string: default when omitted
 {
     my $blob = $drv->_ofn_filter_string(undef);
     is $blob, encode( 'UTF-16LE', "All files\x00*.*\x00\x00" ), 'omitted filter defaults to All files|*.*';
 }
 
-# ── 4. OPENFILENAMEW struct: valid field offsets + size 152 (x64) ───────
+#  4. OPENFILENAMEW struct: valid field offsets + size 152 (x64)
 {
     my ( $ptr, $parts ) = $drv->_ofn_build( 'open', title => 'Open', filter => 'T|*.t' );
     my $ofn = $parts->[0];
@@ -53,7 +53,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     $drv->_ofn_free( $ptr, $parts );
 }
 
-# ── 5. OPENFILENAMEW: multi-select + no-file-must-exist flags ────────────
+#  5. OPENFILENAMEW: multi-select + no-file-must-exist flags
 {
     my ( $ptr, $parts ) = $drv->_ofn_build( 'open', multi => 1, no_file_must_exist => 1 );
     is $parts->[0]{Flags} & 0x200,  0x200, 'OFN_ALLOWMULTISELECT set with multi => 1';
@@ -61,7 +61,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     $drv->_ofn_free( $ptr, $parts );
 }
 
-# ── 6. OPENFILENAMEW: save-defaults (OVERWRITEPROMPT on, FILEMUSTEXIST off) ─
+#  6. OPENFILENAMEW: save-defaults (OVERWRITEPROMPT on, FILEMUSTEXIST off)
 {
     my ( $ptr, $parts ) = $drv->_ofn_build('save');
     is $parts->[0]{Flags} & 0x2,    0x2, 'OFN_OVERWRITEPROMPT set for save';
@@ -69,7 +69,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     $drv->_ofn_free( $ptr, $parts );
 }
 
-# ── 7. Result parsing: single file ───────────────────────────────────────
+#  7. Result parsing: single file
 {
     my $buf = calloc( 512, 1 );
     my $raw = encode( 'UTF-16LE', "C:\\docs\\a.txt\x00" );
@@ -77,7 +77,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     is $drv->_ofn_parse_result( $buf, 1024, 0 ), 'C:\docs\a.txt', 'single-select result is one path';
 }
 
-# ── 8. Result parsing: multi-file (explorer double-NUL form) ─────────────
+#  8. Result parsing: multi-file (explorer double-NUL form)
 {
     my $buf = calloc( 512, 1 );
     my $raw = encode( 'UTF-16LE', "C:\\docs\x00a.txt\x00b.txt\x00\x00" );
@@ -86,7 +86,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     is $got, [ 'C:\docs\a.txt', 'C:\docs\b.txt' ], 'multi-select result is full paths';
 }
 
-# ── 9. Result parsing: trailing zero padding from the buffer is ignored ──
+#  9. Result parsing: trailing zero padding from the buffer is ignored
 {
     my $buf = calloc( 512, 1 );
     my $raw = encode( 'UTF-16LE', "C:\\docs\x00a.txt\x00\x00\x00\x00\x00" );
@@ -95,7 +95,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     is $got, 'C:\docs', 'single-select result trims trailing NUL padding';
 }
 
-# ── 10. MessageBox flag mapping ──────────────────────────────────────────
+#  10. MessageBox flag mapping
 {
     is $drv->_mb_flags(), 0x0, 'default buttons => MB_OK';
     is $drv->_mb_flags( buttons => 'okcancel' ),         0x1, 'okcancel => MB_OKCANCEL';
@@ -105,7 +105,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     is $drv->_mb_flags( buttons => 'retrycancel' ),      0x5, 'retrycancel => MB_RETRYCANCEL';
 }
 
-# ── 11. MessageBox icon + default-button flags ───────────────────────────
+#  11. MessageBox icon + default-button flags
 {
     my $f = $drv->_mb_flags( buttons => 'okcancel', icon => 'question', default => 2 );
     is $f, 0x1 | 0x20 | 0x100, 'icon question + default 2 combine';
@@ -113,7 +113,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     is $g, 0x4 | 0x10 | 0x200, 'icon error + default 3 combine';
 }
 
-# ── 12. Base driver declares the dialog contract ─────────────────────────
+#  12. Base driver declares the dialog contract
 {
     my $base = Uji::Driver->can('message_box');
     ok $base,                                'Uji::Driver exposes message_box';
@@ -123,7 +123,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     ok Uji::Driver->can('prompt_dialog'),    'Uji::Driver exposes prompt_dialog';
 }
 
-# ── 13. prompt_dialog: OK captures edited text via the test-only hook seam ─
+#  13. prompt_dialog: OK captures edited text via the test-only hook seam
 {
     my $got = $drv->prompt_dialog(
         title   => 'Name',
@@ -137,7 +137,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     is $got, 'typed-value', 'prompt_dialog returns the edited text on OK';
 }
 
-# ── 14. prompt_dialog: cancel returns undef ──────────────────────────────
+#  14. prompt_dialog: cancel returns undef
 {
     my $got = $drv->prompt_dialog(
         title => 'Name',
@@ -146,7 +146,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     ok !defined $got, 'prompt_dialog returns undef on cancel';
 }
 
-# ── 15. prompt_dialog: pre-filled default appears in the edit ────────────
+#  15. prompt_dialog: pre-filled default appears in the edit
 {
     my $got = $drv->prompt_dialog(
         default => 'prefilled',
@@ -155,7 +155,7 @@ $drv->init( Acme::Parataxis::Channel->new( capacity => 8 ) );
     is $got, 'prefilled', 'prompt_dialog returns the pre-filled default when unchanged';
 }
 
-# ── 16. A SECOND driver instance runs its own prompt_dialog independently ─
+#  16. A SECOND driver instance runs its own prompt_dialog independently
 # Regression for the window-class collision: RegisterClassExW no-ops on an existing class name,
 # so before per-instance class names the second driver's prompt window re-used the FIRST
 # driver's wndproc (writing the first driver's prompt_done flag), and the modal pump never saw

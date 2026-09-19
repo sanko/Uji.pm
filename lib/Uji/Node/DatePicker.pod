@@ -1,0 +1,147 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::DatePicker - a calendar/date entry picker
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    Uji::date_picker(
+        value     => $model->{date},
+        min       => '2020-01-01',
+        max       => '2030-12-31',
+        show_none => 1,
+        on_change => sub ($iso) { { type => 'SET_DATE', value => $iso } }
+    );
+
+=head1 DESCRIPTION
+
+L<Uji::Node::DatePicker> lets the user pick a date. The value it works with is an ISO-8601
+C<'YYYY-MM-DD'> string (or C<undef> for "no date"), and the C<on_change> callback always receives that
+form, so the model scalar stays authoritative: re-rendering with the same C<value> cannot drift, in the
+same way the driver owns the text of L<Uji::Node::SpinBox|Uji::Node::SpinBox>.
+
+The picker can be constrained to an inclusive C<min>/C<max> date range, offer a C<'short'>, C<'long'> or
+C<'time'> presentation, and (with C<show_none>) a checkbox the user can clear to mean "no date" -
+reported as the empty string.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally use the L<Uji|Uji/date_picker> helper.
+
+=head3 Parameters
+
+=head4 C<value>
+
+The current date as C<'YYYY-MM-DD'>, or C<undef> for no date. Recomposed live.
+
+=head4 C<min> / C<max>
+
+The inclusive date range as C<'YYYY-MM-DD'>; C<undef> for unbounded. Recomposed live.
+
+=head4 C<format>
+
+C<'short'> (default), C<'long'> or C<'time'>. Changing it live recreates the control.
+
+=head4 C<show_none>
+
+When true, a checkbox lets the user clear the date; the change callback then receives the empty string.
+Default false. Changing it live recreates the control.
+
+=head4 C<useynavigate>
+
+When true, the picker uses up/down arrows instead of the calendar dropdown. Default false. Changing it
+live recreates the control.
+
+=head4 C<on_change>
+
+A callback receiving the ISO-8601 date whenever the user changes it:
+
+    on_change => sub ($iso) { { type => 'SET_DATE', value => $iso } }
+
+The empty string means the date was cleared. Return a message hashref (or C<undef> to ignore the event).
+
+=head3 Inherited Parameters
+
+L<Uji::Node::DatePicker> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>,
+C<enabled>, C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, C<color>, C<background>, C<font>,
+C<font_size>, and C<id>.
+
+=head1 Methods
+
+=head2 C<value>
+
+Returns the current ISO date (or C<undef>).
+
+=head2 C<min>, C<max>
+
+Return the range bounds as ISO dates (or C<undef>).
+
+=head2 C<year>, C<month>, C<day>
+
+Return the numeric components of C<value> (or C<undef> when there is no date). These feed the native
+control at mount time.
+
+=head2 C<min_year>, C<min_month>, C<min_day>, C<max_year>, C<max_month>, C<max_day>
+
+Return the numeric components of C<min> and C<max> (or C<undef> when a bound is missing).
+
+=head2 C<on_change>
+
+Returns the change callback (or C<undef>).
+
+=head2 C<type>
+
+Returns the string C<'date_picker'>.
+
+=head1 How it Works
+
+On Win32 a date picker is a C<SysDateTimePick32> control. Mount applies the value with
+C<DTM_SETSYSTEMTIME> (C<GDT_VALID> for a date, C<GDT_NONE> to clear) and the natural range with
+C<DTM_SETRANGE>; live changes ride the same messages. The picker reports every user edit through a
+C<DTN_DATETIMECHANGE> notification delivered to the parent window; the driver reads the fresh year/month/
+day out of the C<NMDATETIMECHANGE> structure, completes it to C<'YYYY-MM-DD'>, and hands it to
+C<on_change> - or the empty string when the user cleared the C<show_none> checkbox.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - the toolkit entry point (exports C<date_picker>)
+
+=item * L<Uji::Node::SpinBox> - the read-only numeric stepper
+
+=item * L<Uji::Node::Slider> - the continuous, no-arithmetic companion
+
+=item * L<Uji::Node> - the base node class and shared parameters
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+SysDateTimePick32 DTM_SETSYSTEMTIME DTM_SETRANGE DTM_GETSYSTEMTIME DTM_GETRANGE DTN_DATETIMECHANGE GDT_VALID GDT_NONE
+NMDATETIMECHANGE DTS_SHOWNONE DTS_UPDOWN GDTR_MIN GDTR_MAX YYYY-MM-DD
+
+=end stopwords
+
+=cut

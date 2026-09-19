@@ -34,7 +34,9 @@ split their available space among children using padding, spacing, and C<flex>.
 =head4 C<driver>
 
 Optional. A L<Uji::Driver>. When the driver provides C<measure_text>, intrinsic sizes use the real native font metrics;
-otherwise text is estimated at 8px per character.
+otherwise text is estimated at 8px per character. The driver's C<measure_image> seam feeds the image widget's natural
+raster size; a driver without it falls back to a C<64x64> placeholder. A C<canvas> is pure content with no intrinsic
+box: it defaults to C<(200, 100)> unless an explicit C<w>/C<h> overrides it.
 
 =head1 Methods
 
@@ -72,6 +74,15 @@ When a node is smaller than its cell on the cross axis, C<align_w>/C<align_h> (C
 C<'stretch'>) place it within the freed space. The container resolves the node's cross size with
 L</_cross_size> (the same rule C<compute> will apply) and offsets the origin by a fraction of the free space
 I<before> recursing, so the whole subtree's absolute coordinates shift with it. See L<Uji::Node/align_w>, C<align_h>.
+
+=head2 C<overlay layout>
+
+An C<overlay> (see L<Uji::Node::Overlay>) is a plane, not a stack: every child is a layer placed in
+the SAME inner box, its own width/height resolved by the usual rules (explicit, fit fill/content,
+container fill) and its origin offset by C<align_w>/C<align_h> exactly as cross-axis alignment does in
+a column - so a content-fit label with C<align_w =E<gt> 'end', align_h =E<gt> 'end'> lands in the
+bottom-right corner. The overlay's intrinsic box is the largest layer; array order is the draw order
+and the Win32 driver turns that into native Z-order (see L<Uji::Driver::Win32>).
 
 =head2 C<_layout_flex ( $container, $dir, $x, $y, $w, $h )>
 

@@ -1,0 +1,66 @@
+=pod
+
+=head1 NAME
+
+Uji::Node::Canvas - a raw 2D drawing surface driven by a callback
+
+=head1 SYNOPSIS
+
+    my $canvas = Uji::canvas(
+        w          => 320,
+        h          => 200,
+        background => '#F0F0F0',
+        on_draw    => sub ($d) {
+            $d->clear('#FFFFFF');
+            $d->color('#CC0000');
+            $d->rect( 2, 2, $d->size );
+            $d->fill_ellipse( 30, 30, 80, 80 );
+        },
+    );
+
+=head1 DESCRIPTION
+
+A canvas is a frameless child control whose content is C<on_draw>: a callback that
+renders the surface with L<Uji::Draw>. The driver repaints the canvas on every WM_PAINT
+from the node's CURRENT state (including a changed background), so an app either lets the
+normal show/focus/resize cycle repaint it, or bumps C<redraw> to force a repaint.
+
+The canvas has no intrinsic content: when neither C<w> nor C<h> is given the layout gives
+it a (200, 100) box (see L</PARAMETERS>); otherwise the explicit size wins verbatim.
+
+=head2 The on_draw callback
+
+C<on_draw> receives a single L<Uji::Draw> session already cleared to C<background> and
+sized to the laid-out box (call C<< $d->size >> to read it). All drawing happens into a
+back-buffer, so the callback can be arbitrarily expensive without visible flicker.
+
+=head1 PARAMETERS
+
+See L<Uji::Node/"COMMON NODE PARAMETERS"> for the shared surface - id, background,
+enabled, tooltip, codepoint and so on - plus:
+
+=over 4
+
+=item * C<on_draw> - C<Coderef>, optional. The render callback. Replacing it (via the app
+reconciler) repaints automatically.
+
+=item * C<redraw> - C<Unsigned Integer>, default 0. Bumping this number invalidates the
+surface; a repaint follows. With no reconciliation the same callback simply redraws.
+
+=item * C<w>, C<h> - explicit box; without them the driver uses a (200, 100) natural size.
+
+=item * C<background> - the base colour the draw session is cleared to before C<on_draw>
+runs (a live repaint reads it fresh, so a reconciled background restyles the surface).
+
+=back
+
+=head1 TYPE
+
+The node C<type> is C<'canvas'>.
+
+=head1 SEE ALSO
+
+L<Uji::Draw> for the drawing API, L<Uji::Node> for the shared node surface,
+L<Uji::Driver::Win32> for the Windows implementation.
+
+=cut

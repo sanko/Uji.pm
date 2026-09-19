@@ -12,20 +12,138 @@ below). Candidates, roughly in recommended order:
 - [x] **Auto-resize / fit policy**: per-widget `fit`/`fit_w`/`fit_h` (`fill`/`content`/`fixed` + aliases),
       per-node `min_w`/`min_h`/`max_w`/`max_h` clamps, and `flex` now growing leaves along the main axis;
       listed as DONE in Layout Engine below.
-- [ ] **Toolbar icons/labels** (lines 76-101): `TB_SETIMAGELIST`/`CImageList` + a `WIC`/`GDI+` raster
-      loader so toolbar buttons stop rendering blank — this unlocks `Image` too.
+- [x] **Toolbar icons/labels** (lines 76-101): labels were blank because `TB_ADDSTRINGW` was called with
+      `wParam=1` + a single-null buffer (returns -1); the correct call is `wParam=0` + double-null UTF-16.
+      Icons now load via the GDI+ flat API (`GdipLoadImageFromFile`, no `W` suffix on the export) into a
+      per-toolbar `ILC_COLOR32` `ImageList` attached with `TB_SETIMAGELIST` (passing the boxed pointer REF
+      through `SendMessageW`'s `SSize_t` lParam mails the SV's address — must use `Affix::address`).
+      Buttons dedupe a shared `icon` spec to one slot; `icon_size` param (default 16) is mount-only.
+      `t/017_toolbar.t` 21 subtests (incl. a repaint+pixel assertion that the icon zone paints), icons in
+      `eg/widget_toolbar.pl`, docs updated. This unlocked the `Image` widget (same loader).
 - [x] **`ListView`** (multi-column table; `SysListView32` `LVM_*` report-view, columns/rows/selection +
       `multiple`/`full_row_select`/`grid_lines`/`header`, header-click column sorting (`sortable`/`on_sort`),
       header drag reorder (`reorderable`/`on_reorder`), per-column `format` for numeric cells) — shipped this
       milestone (+ sort/reorder/format follow-up, see below).
-- [ ] **`DatePicker`** (`SysDateTimePick32` + `DTM_*`) — small and self-contained.
-- [ ] **Small widgets:** `Spinner` (activity indicator), `Spacer`, `Overlay`, `Canvas` (`on_draw`).
+- [x] **`DatePicker`** (`SysDateTimePick32` + `DTM_*`) — real accessors parse the ISO `value`/`min`/`max`
+      into the `DTM_SETSYSTEMTIME`/`DTM_SETRANGE` writes, `DTN_DATETIMECHANGE` uses dwFlags so a cleared
+      `show_none` checkbox reports `''`, and live `value`/`min`/`max` re-bind through `set_prop`. (Details
+      in Widget Set below.)
+- [x] **Small widgets:** `Spinner` (activity indicator), `Spacer` (done, see Widget Set), `Overlay`, `Canvas` (`on_draw`) — all done this milestone, see "Recently completed".
+- [ ] **New widget backlog** (see Widget Set -> Candidate backlog, with Win32/GTK4/Cocoa native controls
+      per widget): `Calendar`, `RichText`, `ColorButton`, `FontButton`, `Spinner`, `Separator` (done, see
+      below), `Image`, `TrayIcon`, `PopupMenu`, `WebView`, `Canvas`, `GLArea`, `SearchInput`.
 - [ ] **Dark Mode auto-detection + DPI awareness** (lines 306-307).
 - [ ] Live sanity pass on `eg/widget_scroll_view.pl` (close out the deferred ScrollView note, lines 297-304).
 - [ ] **More subscription sources** on the `Sub` machinery: focus/blur, close-request, and keyboard chords
       (today only `sub_interval` and `sub_on_resize` exist).
 
 ### Recently completed (this milestone)
+- [x] **`Canvas`** (raw 2D drawing surface) + **`Uji::Draw`** (GDI+ drawing wrapper): `canvas()` node with
+      `on_draw` (a callback receiving one `Uji::Draw` session already cleared to `background` and sized to
+      the laid-out box) and `redraw` (a bump counter that forces a repaint). The canvas is a leaf widget
+      with no intrinsic content: `Layout::_intrinsic` gives it a `(200, 100)` box unless an explicit
+      `w`/`h` overrides it. The Win32 driver registers a dedicated per-instance `UjiCanvasClassN` window
+      class whose proc handles WM_PAINT + WM_ERASEBKGND (returns 1, no flicker): interning a userspace
+      `PAINTSTRUCT` and affine calls to user32 `BeginPaint`/`EndPaint` and gdi32
+      `CreateCompatibleDC`/`BitBlt`/`DeleteDC` (gotcha: `BeginPaint` is user32, NOT gdi32 — first compile
+      errored "Failed to locate symbol"). Paint renders the callback into a `PixelFormat32bppPARGB`
+      back-buffer (GdipCreateBitmapFromScan0 -> GdipGetImageGraphicsContext -> `Uji::Draw` callbacks),
+      composites to an HBITMAP and BitBlts it SRCCOPY; it reads the CURRENT node (registry kept fresh by
+      `update_registry`), so a reconciled `on_draw`/`background` is picked up with no cached state.
+      `Uji::Draw` is a small stateful wrapper (colour/width persist; `size`, `clear`, `color`, `width`,
+      `antialias`, `line`, `rect`, `fill_rect`, `ellipse`, `fill_ellipse`, `arc`, `fill_pie`) using the
+      integer GDI+ variants (`GdipDrawLineI`, `GdipDrawRectI`, `GdipDrawArcI`, ...) with per-call
+      pen/brush create/delete. Refined for portability: the GDI+ bindings moved to a platform back end
+      `Uji::Draw::Win32` (`lib/Uji/Draw/Win32.pm`, mirroring `Uji::Driver::Win32`); the base `Uji::Draw`
+      now owns the platform-neutral state + vocabulary and the abstract `_clear/_line/_rect/...`
+      contract, so GTK4 (Cairo) / Cocoa backends can ship alongside their drivers without touching
+      `on_draw` code. The Reconciler diffs `on_draw`/`redraw` -> `set_prop` (invalidate); the
+      widget is invalidated at mount, on resize and by `move_widget` when its box changes.
+      `t/035_canvas.t` (node/factory, layout natural+override, `Uji::Draw` colour/size headless, real-driver
+      mount + synchronous paint via InvalidateRect+UpdateWindow asserting the callback's `size`/state,
+      reconcile-bump keeps the same control), `eg/widget_canvas.pl` (GDI+ scene: checkerboard, border
+      rect, overlapping circles, arc+pie, seam, Repaint button), `Canvas.pod` + `Draw.pod` +
+      `Uji.pod` section/SEE ALSO + driver/Layout pod updates.
+- [x] **`Image`** (static raster widget): `image()` node with `src` (file path or `data:image/...;base64,..`
+      URI), `alt` and `object_fit` (`contain`/`cover`/`fill`). Natural box = the raster's own size, via a
+      `measure_image` driver seam; an explicit `w`/`h` preserves the aspect on the free axis. The driver
+      reuses the GDI+ loader (factored into a shared `_gdi_image` decode helper used by both `_icon_hicon`
+      and the new `_raster_hbitmap`) to raster the source into the widget's EXACT box and hands it to a
+      STATIC `SS_BITMAP` host via `STM_SETIMAGE` (wParam = `IMAGE_BITMAP` (0), NOT 1 — gotcha). The picture
+      re-rasters on any `move_widget` that changes the box (mount default 16x16 never survives the layout)
+      and on `set_prop('src'/'object_fit')` via the Reconciler's live diff. Transparent pixels composite
+      onto the dialog-face colour (a GDI STATIC draws bitmaps opaquely). `t/034_image.t` (5 subtests: node/
+      factory, layout natural+aspect+placeholder fallback, real-driver mount+raster-at-box+fit-swap,
+      data-URI decode, reconcile src/object_fit keeps the control), `eg/widget_image.pl`, `Image.pod` +
+      `Uji.pod` section/SEE ALSO + driver/Layout pod updates.
+- [x] **`Spinner`** (animated activity indicator): `spinner()` node with `size` (intrinsic square,
+      default 24), `color`, `speed` (ms/frame, default 80) and `running` (default on). No native
+      "busy" control is used - comctl32's `PBM_SETMARQUEE` needs the comctl32 v6 manifest this app
+      deliberately avoids, so the driver DRAWS the animation itself: `_spinner_frames` pre-renders
+      12 HICONs of an anti-aliased GDI+ spoke fan (bright head, dimming tail) and hosts them on a
+      STATIC `SS_ICON | SS_CENTERIMAGE` child; each spinner arms a WM_TIMER (id = its control id)
+      and the shared `_ctrl_msg` WM_TIMER branch advances the frame via `STM_SETICON`. `running` maps
+      to `set_prop('running')` for arm/disarm on reconcile. War story: passing the malloc'd Affix
+      OBJECT to `GdipDrawLineI`/`GdipDrawArc` crashed the process (0xC0000005) - draw calls need the
+      RAW pointer (`unpack 'Q<', Affix::raw(...)`), and `GdipDrawArc`'s six Float args mis-marshal
+      under Affix entirely, so the fan is integer `GdipDrawLineI` spokes. `t/033_spinner.t`
+      (node/layout + synthetic-WM_TIMER frame-advance + wrap-around + running prop + reconcile-append
+      on the real driver), `eg/widget_spinner.pl`, `Uji.pod`/`Spinner.pod`/driver pod updates.
+      Closed the start/stop report: the Reconciler now diffs the spinner props (running/speed/size/color)
+      so a patched `running => 0` disarms the WM_TIMER via `set_prop` (the handler takes the value BEING
+      SET, not the still-stale node) and the WM_TIMER branch animates only while `spin_armed`. Extended
+      `t/033_spinner.t` with the reconcile path (toggle through `patch_windows` freezes then resumes the
+      same control). Also restored capability-based min/max/step diffing (Slider AND SpinBox) after a
+      prior `slider`-only gate broke `t/009_reconciler_widgets.t`.
+- [x] **`Overlay`** (stacked-layers container): `overlay()` node with `children` (array order = draw
+      order, later layers over earlier ones) and `padding`. Pure-layout container, no native control
+      (children mount as host-window siblings like any container). Each LAYER sizes itself by the
+      normal rules and is offset by `align_w`/`align_h`, so a bottom-right badge is `fit =>
+      'content', align_w => 'end', align_h => 'end'`; containers (a nested `column`, an inner
+      `overlay`) fill the box by default. `Layout.pm`: `_is_container` + `_intrinsic` (largest layer)
+      + new `_layout_overlay`. Win32 driver: `_apply_overlay`/`_raise_layer` re-raise each layer with
+      `HWND_TOP` in array order after mount AND after every reconcile (the Reconciler calls it post
+      child-loop) — empirically Win32 puts the FIRST-created sibling on top, which is the opposite of
+      the draw-order contract, so the raise flips it (probe: GW_CHILD chain shows id 72,71 then
+      appended 73,72,71). `t/032_overlay.t` (4 subtests: intrinsic/padding, shared-plane layout +
+      alignment, container-fill + centered badge, and a real-driver z-order + reconcile-append check),
+      `eg/widget_overlay.pl`, `Uji.pod`/`Overlay.pod`/driver+reconciler+layout pod updates.
+- [x] **`Calendar`** (composed month grid): `calendar()` node expanding into ordinary toolkit controls
+      (a `◀` month-title `▶` header, a weekday-letter row, and six rows of 28x22 day `BUTTON` cells)
+      instead of a native picker — a `SysMonthCal32` prototype proved unreliable (inert `MCM_*` + heap
+      corruption on destroy), so the composed grid reuses the exact VDOM/Layout/driver pipeline (same
+      philosophy as `SearchInput`'s auxiliaries). `on_select` fires with the ISO day; `on_nav` with
+      `-1`/`+1` from the header buttons; `min`/`max` disable out-of-range days; `month` defaults to the
+      value's month. Month math is Zeller's congruence (no `POSIX::mktime`). Two driver-side seams made
+      strings survive native routing: a shared `0x6000+` numeric control-id allocator for any node whose
+      id is a string (`cid_to_id` reverse map, `WM_COMMAND` routing, cleaned up on unmount), and a
+      Reconciler special-case that diffs a calendar by its I<rendered grid> key (month/value/min/max +
+      every cell, ids excluded) and re-mounts the cell subtree wholesale — per-cell patching is
+      meaningless when a day cell lands in a slot that held a blank spacer. Native calendar code cleaned
+      out of the driver. `t/031_calendar.t` (45 subtests: structure, Zeller/leap math + Jan 2000 grid,
+      min/max disables, live `WM_COMMAND` clicks routing PICKED/NAV, reconcile-remount with a stable id),
+      `eg/widget_calendar.pl`, `Uji.pod`/`Calendar.pod`/driver+reconciler pod updates.
+- [x] **`SearchInput`** (search-style entry): `search_input()` node — a single-line `EDIT` with an
+      optional leading 16px icon glyph (reuses the GDI+ raster loader, `data:image/...` URI) and a
+      trailing flat `✕` clear button. `EM_SETMARGINS` reserve both strips so text/caret never run
+      under them; keystrokes fire `on_input` via `EN_CHANGE`, and clicking `✕` empties the field,
+      refocuses it, and fires `on_search('')`. The clear button owns a `0x4000+` command id routed
+      through the registry (`BN_CLICKED`), so it rides the freeze/clear/suppression rules like other
+      commands; `icon` is mount-only (recreate destroys the orphaned glyph + drops the stale cmd id)
+      and `enabled`/`visible`/`move_widget` stay in sync with the aux controls. Enter-to-search is
+      intentionally NOT wired (no control subclassing yet) — pair with a "Search" button. Layout gives
+      it `(max(100,tw), 24)` with icon/clear/padding bumps. `t/030_search_input.t` (22 subtests:
+      intrinsic boxes, class/style, icon glyph, clear-button show/hide, EN_CHANGE→on_input, ✕-click→
+      on_search + text-clear, reconcile recreates on icon change), `eg/widget_search_input.pl`,
+      `Uji.pod`/`SearchInput.pod`/driver+reconciler pod updates.
+- [x] **`Separator`** (thin ruled divider): `separator()` node with mount-only `orientation`
+      (`'horizontal'`/`'vertical'`). Layout gives it a 3px intrinsic box on the perpendicular axis and
+      auto-stretches it across the container's cross axis (like `spacer`, added to the fill defaults in
+      `Layout.pm`), so a column rule spans the column width and a row rule the row height — no `w`/`h`
+      needed. Win32: a `STATIC` control with `SS_ETCHEDHORZ` (0x10) / `SS_ETCHEDVERT` (0x11);
+      `orientation` changes recreate the control. `t/029_separator.t` (9 subtests: intrinsic boxes,
+      column/row spans, live class/style check, reconcile-recreate to the vertical bit),
+      `eg/widget_separator.pl`, `Uji.pod`/`Separator.pod`/driver+reconciler pod updates.
 - [x] **`ListView`** (`SysListView32` report view): `list_view` node with `value`/`columns` (`{label,width}`,
       width measured by default)/`rows` (cell arrayrefs or `{value=>, columns=>[]}`)/`on_select` plus
       mount-only `multiple`/`full_row_select`/`grid_lines`/`header`, header-click column sorting
@@ -68,7 +186,7 @@ below). Candidates, roughly in recommended order:
 - [x] Dialogs: `FileOpenDialog`, `FileSaveDialog`, `MessageBox`, `PromptDialog`, `ColorPicker`
 - [x] Runtime menu-bar mutation (`Reconciler` diff of `menu_bar`; `MenuBar` snapshots items at construction)
 - [x] Unicode text across the `WString` boundary (`utf8everywhere`) + per-instance window classes
-- [ ] `DatePicker` (moved to the frontier list above)
+- [x] `DatePicker` (calendar date entry via `SysDateTimePick32` + `DTM_*`)
 
 ## Core Architecture
 - [x] Unidirectional State Loop (The Elm Architecture: Model-View-Update)
@@ -121,17 +239,79 @@ below). Candidates, roughly in recommended order:
   - Win32: `LISTBOX` with `LBS_NOTIFY|LBS_NOINTEGRALHEIGHT|LBS_HASSTRINGS`; items via `LB_ADDSTRING`; `LBN_SELCHANGE`
   - Single selection + `multiple => 1` (`LBS_MULTIPLESEL`): value/`on_select` become arrayrefs; read back via `LB_GETSELCOUNT`/`LB_GETSELITEMS`
 - [x] `SpinBox` (Numeric stepper with `min`/`max`/`step`; Win32 `msctls_updown32` buddy + read-only `EDIT`)
-- [ ] `DatePicker` (Calendar-based date entry)
+- [x] `DatePicker` (Calendar-based date entry)
+  - Win32: `SysDateTimePick32`. Mount and live `value` write via `DTM_SETSYSTEMTIME` (`GDT_NONE` when the
+    value is empty), `min`/`max` via `DTM_SETRANGE`; `DTN_DATETIMECHANGE` routes to the picker's parent
+    wndproc, where dwFlags + the reported `SYSTEMTIME` complete back to `'YYYY-MM-DD'` (`` '' `` when the
+    `show_none` checkbox is cleared). `format` (`short`/`long`/`time`), `show_none` (`DTS_SHOWNONE`) and
+    `useynavigate` (`DTS_UPDOWN`) are mount-only styles (native recreate on change via `_mount_only_props`).
+    `ICC_DATE_CLASSES` added to `InitCommonControlsEx`.
 - [x] `ToggleSwitch` / `ToggleButton` (2-state sticky push, `checked`/`on_toggle`)
 
 ### Buttons & Static Display
 - [x] `ToggleButton` (Sticky push style, `checked` state)
 - [x] `LinkButton` (Borderless `BS_FLAT` click target, `on_click`)
-- [ ] `Image` (Loads/displays static raster from data or path)
-- [ ] `Canvas` (Raw 2D drawing surface; `on_draw` callback)
+- [x] `Image` (Loads/displays static raster from data or path) — DONE this milestone: see "Recently completed"
+- [x] `Canvas` (Raw 2D drawing surface; `on_draw` callback) — DONE this milestone: see "Recently completed"
 - [x] `ProgressBar` (Determinate `value`; `msctls_progress32` + `PBM_*`)
-- [ ] `Spinner` (Activity indicator, no value)
+- [x] `Spinner` (Activity indicator, no value) — DONE this milestone: see "Recently completed"
 - [x] `StatusText` (Subtle footer/hint text)
+
+### Candidate backlog (cross-platform native controls)
+- [x] `Calendar` (standalone month-view picker, distinct from `DatePicker`'s dropdown) — DONE as a
+  composed grid this milestone (see "Recently completed" above); the Win32 `SysMonthCal32` prototype was
+  rejected, so the row below records the native-control notes as background only.
+  - Win32: ~~`SysMonthCal32` (`MCM_*` message family, `MCN_SELCHANGE`)~~ → composed `BUTTON`/`STATIC` grid
+  - GTK4: `GtkCalendar`
+  - Cocoa: `NSCalendarView` (macOS 11+) or `NSDatePicker`
+- [ ] `RichText` (styled/multi-format text view)
+  - Win32: `RICHEDIT` (`EM_SETCHARFORMAT`; requires loading `msftedit`)
+  - GTK4: `GtkTextView` + `GtkTextBuffer` tags
+  - Cocoa: `NSTextView` + `NSAttributedString`
+- [ ] `ColorButton` (inline color well/swatch, opens a picker; distinct from the existing `ColorPicker` dialog)
+  - Win32: owner-drawn `BUTTON` swatch + `CHOOSECOLOR`
+  - GTK4: `GtkColorButton` / `GtkColorChooserWidget`
+  - Cocoa: `NSColorWell` / `NSColorPanel`
+- [ ] `FontButton` (shows a font, opens a picker)
+  - Win32: `ChooseFont` dialog driven by a button/static
+  - GTK4: `GtkFontButton` / `GtkFontChooserWidget`
+  - Cocoa: `NSFontPanel`
+- [ ] `Spinner` (indeterminate activity indicator; already tracked in Buttons & Static Display)
+  - Win32: `PBM_SETMARQUEE` endless progress bar (comctl32 v6) or `SysAnimate32`
+  - GTK4: `GtkSpinner`
+  - Cocoa: `NSProgressIndicator` (indeterminate)
+- [ ] `Separator` (thin horizontal/vertical rule; pure-layout leaf like `Spacer` could skip a HWND)
+  - Win32: `STATIC` `SS_ETCHEDHORZ` / `SS_ETCHEDVERT`
+  - GTK4: `GtkSeparator`
+  - Cocoa: `NSBox` (custom)
+- [ ] `Image` (static raster; already tracked in Buttons & Static Display / Image loading section)
+  - Win32: `STATIC` `SS_BITMAP` + `WIC`/`GDI+` decode
+  - GTK4: `GtkImage`
+  - Cocoa: `NSImageView`
+- [ ] `TrayIcon` / status-item (app-level, not a layout widget)
+  - Win32: `Shell_NotifyIcon` (`NIM_ADD`, `WM_TRAYICON`/`WM_USER` messages)
+  - GTK4: no `GtkStatusIcon` — use `GNotification` / appindicator portal
+  - Cocoa: `NSStatusItem`
+- [ ] `PopupMenu` / context menu (right-click menus; reuse `MenuBar` item plumbing)
+  - Win32: `TrackPopupMenu`
+  - GTK4: `GtkPopoverMenu` / `GMenu`
+  - Cocoa: `NSMenu` (`menuForEvent:`)
+- [ ] `WebView` (embedded browser; heavy dependency on all three)
+  - Win32: WebView2 (Evergreen runtime)
+  - GTK4: WebKitGTK (`gtk_web_view`)
+  - Cocoa: `WKWebView`
+- [ ] `Canvas` (raw 2D drawing surface; already tracked in Buttons & Static Display)
+  - Win32: `GDI+`/Direct2D on a `STATIC`-painted child, or OpenGL (`wgl`)
+  - GTK4: `GtkDrawingArea` + Cairo
+  - Cocoa: `NSView` `drawRect:` + Core Graphics
+- [ ] `GLArea` (accelerated 3D surface)
+  - Win32: OpenGL `wglMakeCurrent` on a child window
+  - GTK4: `GtkGLArea`
+  - Cocoa: `NSOpenGLView` / Metal `CAMetalLayer`
+- [x] `SearchInput` (search-style entry; extension of `text_input`) — done, see "Recently completed" above
+  - Win32: `EDIT` + placeholder paint (existing seam) + optional clear button
+  - GTK4: `GtkSearchEntry`
+  - Cocoa: `NSSearchField`
 
 ### Image & icon loading (future: drives `Toolbar` icons + `Image` widget + `ListView`/`TreeView`/menu glyphs)
 - [ ] Icon loader + `CImageList` plumbing for `TB_SETIMAGELIST` so toolbar buttons can show icons (needed to
@@ -151,18 +331,24 @@ below). Candidates, roughly in recommended order:
 - [x] `ScrollView` (Clipping + scrollable region, `orientation`)
 - [x] `SplitView` (Movable divider between two panes, `orientation`)
 - [x] `GroupBox` (Labeled visual grouping of children)
-- [ ] `Spacer` (Explicit flexible whitespace, flex-aware)
-- [ ] `Overlay` (Stack children on top of previous; e.g. badge on image)
+- [x] `Spacer` (Explicit flexible whitespace, flex-aware) — pure-layout leaf (`type eq 'spacer'`): zero
+      intrinsic box, participates in flex/min/max, mounts NO control. Layout special-cases it
+      (zero `_intrinsic`, cross box matches the tallest sibling in a row via the spacer `_cross_size` cell
+      threaded into `compute`); the Reconciler diffs it like any leaf (bounds -> `move_widget`, which
+      no-ops with no registry record) and the Win32 driver's generic container branch skips mounting it
+      entirely (no HWND, no Affix seam). See `lib/Uji/Node/Spacer.pm`, `lib/Uji/Node/Spacer.pod`,
+      `t/027_spacer.t` (4 subtests), `t/028_verbatim_spacer.t`.
+- [x] `Overlay` (Stack children on top of previous; e.g. badge on image) — DONE this milestone:
+      a plane container (see "Recently completed" above); no native control, `_layout_overlay` +
+      driver `_apply_overlay` z-order enforcement.
 
 ### Data Display & Navigation
 - [x] `ListView` (Multi-column table; `columns =>`, `rows =>`, `on_select`, `multiple`/`full_row_select`/`grid_lines`/`header`, click-to-sort `sortable`/`on_sort` + header-drag `reorderable`/`on_reorder` + per-column `format`; `SysListView32` `LVM_*` report view with a driver-side slot table for `LVN_ITEMCHANGED` routing) - see `lib/Uji/Node/ListView.pm`, `t/025_list_view.t`, `eg/widget_list_view.pl`
 - [x] `TreeView` (Hierarchical data; `nodes =>`, `on_select`)
 - [x] `StatusBar` (Bottom-of-window status region)
 - [x] `Toolbar` (Row of icon/text actions)
-- [ ] **Follow-up needed:** toolbar items render with NO ICONS and the button LABEL TEXT is not visible
-      (`TBSTYLE_LIST` + `I_IMAGENONE` buttons; `TB_ADDSTRINGW` string ids are assigned and verified in tests,
-      but the live demo shows blank buttons). Needs a live `eg/widget_toolbar.pl` visual pass, likely an
-      image-list + toolbar icon plumbing fix. See the "Image & icon loading" work item below.
+- [x] **Toolbar icons/labels follow-up RESOLVED** — buttons render their labels and (opt-in) icons; see the
+      "Next Up" entry above for the root cause (`TB_ADDSTRINGW` contract) and the GDI+ icon loader.
 - [x] `Menu` / `MenuBar` (Application-level menus; window-frame menu bar, recursive submenus,
       separators, checked/greyed items, `WM_COMMAND` routing via the shared 0x4000+ idCommand
       allocator. No accelerators yet — main menu only. See

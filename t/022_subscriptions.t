@@ -18,7 +18,7 @@ package Canned::Channel {
     sub size { my ($s) = @_; scalar @{ $s->{q} } }
 }
 
-# --- the subscription factories ------------------------------------------------
+# the subscription factories
 
 subtest 'sub_interval normalizes its descriptor' => sub {
     my $sub = Uji::sub_interval( 1000, { type => 'TICK' } );
@@ -47,7 +47,7 @@ subtest 'sub_on_resize' => sub {
     is $sub->{key},  'resize:{type=RESIZED}', 'key';
 };
 
-# --- a live app ----------------------------------------------------------------
+# a live app
 
 my $view = sub ($m) {
     Uji::window(

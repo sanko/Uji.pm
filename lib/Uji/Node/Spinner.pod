@@ -1,0 +1,89 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Spinner - an animated activity indicator
+
+=head1 SYNOPSIS
+
+    Uji::spinner(
+        size    => 28,
+        color   => '#0081C8',
+        speed   => 40,       # ms between frames
+        running => 1,
+    );
+
+=head1 DESCRIPTION
+
+An C<spinner> is the classic "please wait" widget: a rotating fan of spokes that reads as
+indeterminate activity. It is a leaf widget whose intrinsic box is a square of C<size> pixels
+(default C<24>); the natural size flows through layout like any other leaf, so it sits happily in a
+row or column alongside text and buttons.
+
+The driver pre-renders a dozen animation frames into HICONs (a GDI+ spoke fan drawn with an
+anti-aliased pen; the bright head fades into a dimming tail) and swaps them on an SS_ICON static
+host, clocked by a dedicated WM_TIMER (one timer per spinner, id = the control id). C<running>
+arms/disarms that timer; C<speed> is the millisecond interval between frames. Because the frames
+are plain icons, the widget scales cleanly with C<size> and honours C<color> on every frame.
+
+There is nothing to compose or click; a spinner is normally toggled from your view function by
+patching C<running>, which maps to the driver's C<set_prop('running', ...)> path.
+
+=head2 Parameters
+
+=over
+
+=item C<size>
+
+The square size of the indicator in pixels. Default C<24>; the driver clamps anything below
+C<16>. Recomposed live.
+
+=item C<color>
+
+The spoke colour as C<'#RRGGBB'>. Default C<'#2e5d8c'>. Recomposed live.
+
+=item C<speed>
+
+Milliseconds per frame. Default C<80>. Recomposed live (re-arms the timer).
+
+=item C<running>
+
+C<1> to animate, C<0> to freeze on the current frame. Default C<1>. Recomposed live.
+
+=back
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<spinner>)
+
+=item * L<Uji::Node/Common Parameters> - C<color>, C<w>/C<h>, C<visible>
+
+=item * L<Uji::Node::ProgressBar> - a determinate progress indicator
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+anti-aliased spokes indeterminate SS_ICON HICON
+
+=end stopwords
+
+=cut

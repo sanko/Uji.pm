@@ -13,7 +13,7 @@ use Encode qw[decode encode];
 #
 skip_all 'Win32 only' unless $^O eq 'MSWin32';
 
-# ── Menu constants (winuser.h) ─────────────────────────────────────────
+#  Menu constants (winuser.h)
 my $MF_STRING    = 0x0000;
 my $MF_POPUP     = 0x0010;
 my $MF_SEPARATOR = 0x0800;
@@ -48,14 +48,14 @@ my $wrb = $drv->_get_registry_record( $vtree->id );
 ok $wrb,                                        'window has a registry record';
 ok $wrb->{menu_bar} && $wrb->{menu_bar}{hmenu}, 'window mounted a native menu (HMENU)';
 
-# ── 1. Client area is reduced by the menu bar ───────────────────────────
+#  1. Client area is reduced by the menu bar
 # A window with a menu bar has a shorter client area than its untitled request.
 {
     my ( $cw, $ch ) = $drv->_get_client_size( $wrb->{hwnd} );
     ok $ch < 400, "client height reduced by menu bar (got $ch < 400)";
 }
 
-# ── 2. All leaf items got command IDs in the 0x4000+ range ──────────────
+#  2. All leaf items got command IDs in the 0x4000+ range
 {
     my $by_cmd = $wrb->{menu_bar}{by_cmd};
     my @ids    = map { $by_cmd->{$_}{id} } keys %$by_cmd;
@@ -65,7 +65,7 @@ ok $wrb->{menu_bar} && $wrb->{menu_bar}{hmenu}, 'window mounted a native menu (H
     }
 }
 
-# ── 3. Checked + grayed initial states ──────────────────────────────────
+#  3. Checked + grayed initial states
 {
     my $by_cmd = $wrb->{menu_bar}{by_cmd};
 
@@ -77,7 +77,7 @@ ok $wrb->{menu_bar} && $wrb->{menu_bar}{hmenu}, 'window mounted a native menu (H
     ok exists $map{dis},  'Disabled item registered';
 }
 
-# ── 4. WM_COMMAND dispatch simulates clicking "Open" ─────────────────────
+#  4. WM_COMMAND dispatch simulates clicking "Open"
 {
     my $by_cmd = $wrb->{menu_bar}{by_cmd};
     my $open_cmd;
@@ -97,7 +97,7 @@ ok $wrb->{menu_bar} && $wrb->{menu_bar}{hmenu}, 'window mounted a native menu (H
     is $msg->{id},   'open',       'channel message id is open';
 }
 
-# ── 5. Reconciler rebuilds the menu when items change ────────────────────
+#  5. Reconciler rebuilds the menu when items change
 {
     my $recon  = Uji::Reconciler->new;
     my $old_mb = Uji::menu_bar( items => $menubar->items, on_click => $menubar->on_click, );
@@ -130,7 +130,7 @@ ok $wrb->{menu_bar} && $wrb->{menu_bar}{hmenu}, 'window mounted a native menu (H
     ok $msg && $msg->{id} eq 'save', 'reconciled Save item routes a click';
 }
 
-# ── 6. Runtime check-state toggle via the MODEL (in-place mutation) ──────
+#  6. Runtime check-state toggle via the MODEL (in-place mutation)
 # The demo mutates $model->{items} in place on MENU_CLICK and rebuilds the menu_bar node from
 # the SAME arrayref every render. The MenuBar node snapshots its items at construction, so two
 # consecutive renders of one shared model structure must still diff -> the reconciler rebuilds
@@ -181,7 +181,7 @@ ok $wrb->{menu_bar} && $wrb->{menu_bar}{hmenu}, 'window mounted a native menu (H
     is $checked2 & $MF_CHECKED, 0, 'un-toggling removes the checkmark';
 }
 
-# ─── clean up ───
+#  clean up
 Uji::Driver::Win32::SendMessageW( $wrb->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE
 #
 done_testing;

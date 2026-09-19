@@ -67,7 +67,7 @@ $app->_drain_and_render( $chan->get );
 is scalar( @{ $app->vtrees } ), 1, 'One window returned by view again';
 ok exists $drv->unmounts->{'dialog'}, 'Dialog was unmounted in driver';
 
-# --- Regression: a window WITHOUT an explicit id must not be destroyed/recreated on re-render.
+# Regression: a window WITHOUT an explicit id must not be destroyed/recreated on re-render.
 # Uji::Node auto-generates a fresh id for every node view() builds, so window identity can only
 # be positional. Before the fix, patch_windows saw old-id != new-id, unmounted the live window
 # and mounted a brand-new one on every render.

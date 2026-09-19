@@ -9,7 +9,7 @@ use Uji::Layout;
 
 my $layout = Uji::Layout->new( driver => MockDriver->new );
 
-# ── 1. align_policy resolution and validation ────────────────────────────
+#  1. align_policy resolution and validation
 subtest 'align_policy resolves per axis and validates' => sub {
     is Uji::button( label => 'x' )->align_policy('w'),                     undef,    'unset => undef';
     is Uji::button( label => 'x', align_w => 'center' )->align_policy('w'), 'center', 'align_w center';
@@ -21,7 +21,7 @@ subtest 'align_policy resolves per axis and validates' => sub {
     ok dies { Uji::text( 'x', align_w => 'middle' )->align_policy('w') }, 'an unknown policy dies';
 };
 
-# ── 2. Horizontal alignment inside a column ──────────────────────────────
+#  2. Horizontal alignment inside a column
 subtest 'align_w places a shrunk leaf across a column' => sub {
     my $col = Uji::column(
         padding  => 0,
@@ -43,7 +43,7 @@ subtest 'align_w places a shrunk leaf across a column' => sub {
     is $b[1]->bw, 40,  'alignment does not change the computed size';
 };
 
-# ── 3. Vertical alignment inside a row ───────────────────────────────────
+#  3. Vertical alignment inside a row
 subtest 'align_h places a leaf down a row' => sub {
     my $row = Uji::row(
         padding  => 0,
@@ -64,7 +64,7 @@ subtest 'align_h places a leaf down a row' => sub {
     is $b[3]->by, 80,  'explicit 40-tall button centers at (200 - 40) / 2';
 };
 
-# ── 4. A floor-constrained content width aligns from the clamped size ────
+#  4. A floor-constrained content width aligns from the clamped size
 subtest 'alignment uses the clamped cross size' => sub {
     my $col = Uji::column(
         padding  => 0,
@@ -78,7 +78,7 @@ subtest 'alignment uses the clamped cross size' => sub {
     is $b->bx, 140, 'center offsets from the clamped 120px width';
 };
 
-# ── 5. Children that already fill the cross axis do not move ─────────────
+#  5. Children that already fill the cross axis do not move
 subtest 'a filling child keeps a zero offset' => sub {
     my $row = Uji::row(
         padding  => 0,
@@ -92,7 +92,7 @@ subtest 'a filling child keeps a zero offset' => sub {
     is $nested->bh, 200, 'container fills the cross axis';
 };
 
-# ── 6. GroupBox applies align_w like a column ────────────────────────────
+#  6. GroupBox applies align_w like a column
 subtest 'group_box honors align_w' => sub {
     my $gb = Uji::group_box(
         label    => 'G',
@@ -107,7 +107,7 @@ subtest 'group_box honors align_w' => sub {
     is $b->bx, 368, 'end offset inside the group body (400 - 32)';
 };
 
-# ── 7. The Text/StatusText `align` text prop is untouched ────────────────
+#  7. The Text/StatusText `align` text prop is untouched
 subtest 'the text align prop coexists with align_w/align_h' => sub {
     my $t = Uji::text( 'x', align => 'center' );
     is $t->align,   'center', 'text align prop still readable';

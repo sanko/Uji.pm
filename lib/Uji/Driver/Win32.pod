@@ -47,10 +47,11 @@ client size back into the window node's bounds.
 =head2 C<mount_children ( $vtree )>
 
 Recursively creates child controls for the tree (see L<Uji::Node|Uji::Node> types): BUTTON
-(text/button/checkbox/radio), STATIC, EDIT (text/multi-line/password, with C<ES_PASSWORD> or the multi-line style
-bits), and C<msctls_trackbar32> sliders. Every control is created at its computed absolute bounds; initial state
-(enabled, visible, tooltip, checked, slider range) is applied immediately. Containers get no native handle, but a
-C<radio_group> gets a registry entry so C<set_prop('value')> can route check state to its radio children.
+(text/button/checkbox/radio), STATIC (text labels and C<SS_ETCHED*>-styled separators), EDIT (text/multi-line/password,
+with C<ES_PASSWORD> or the multi-line style bits), and C<msctls_trackbar32> sliders. Every control is created at its
+computed absolute bounds; initial state (enabled, visible, tooltip, checked, slider range) is applied immediately.
+Containers get no native handle, but a C<radio_group> gets a registry entry so C<set_prop('value')> can route check
+state to its radio children.
 
 =head2 C<poll_events ()>
 
@@ -197,6 +198,38 @@ clicks (value never changed, caret sat "in front" on Windows). The driver owns t
 the classic C<UDS_SETBUDDYINT> lazy C<WM_SETTEXT> into a read-only edit is a re-entrancy/crash trap.
 Arrow clicks surface as C<WM_VSCROLL> from the buddy. Requires C<ICC_UPDOWN_CLASS>.
 
+=item C<search_input> - a single-line C<EDIT> (C<WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL>) with
+two SIBLING auxiliaries: an optional leading icon glyph (C<STATIC> + C<SS_ICON|SS_CENTERIMAGE>, fed by the
+same GDI+ raster loader the toolbar uses) and a trailing flat "clear field" button (C<✕>). The edit's
+C<EM_SETMARGINS> reserve those strips so text and caret never run under them. Keystrokes surface as
+C<EN_CHANGE> -> C<on_input>; clicking C<✕> empties the field, refocuses it, and fires C<on_search('')>.
+The clear button takes a fresh C<0x4000+>-range command id from the driver-wide allocator and carries a
+registry record (C<search_clear> => 1) so its C<BN_CLICKED> routes to the owning node. C<icon> is a
+mount-only property (changing it recreates the control; the orphaned glyph C<STATIC> is destroyed and the
+stale command id is dropped from the routing table). Enter-key submission is not wired (no control
+subclassing); pair the field with a "Search" button in the model.
+
+=item C<calendar> - a COMPOSED widget: no native class is created. The node expands into ordinary
+controls (a header of C<◀>/C<▶> buttons and a title C<STATIC>, a weekday C<STATIC> row, and six
+rows of 28x22 day C<BUTTON>s), mounted under the same containers as any other tree. Because the cell
+ids are regenerated every render, the cell ids are numeric: the driver allocates a C<0x6000+>-range
+control id for any node whose id is a string (reverse map C<cid_to_id>), keeping C<WM_COMMAND> routing
+working, and the reconciler re-mounts the whole cell tree when the grid changes.
+
+=item C<overlay> - a COMPOSED container: layers mount as plain WS_CHILD siblings of the host window
+(no control of its own, like C<column>/C<row>). Native creation order would put the FIRST sibling on
+top, but an overlay's array order is its draw order, so B<C<_apply_overlay>> re-raises each layer with
+C<HWND_TOP> in array order after mounting and after every reconcile - the LAST layer ends up
+frontmost. C<_raise_layer> recurses through container layers (no HWND of their own) to raise every
+sub-control.
+
+=item C<date_picker> - C<SysDateTimePick32> with the C<DTS_SHORTDATEFORMAT>/C<DTS_LONGDATEFORMAT>/
+C<DTS_TIMEFORMAT>, C<DTS_SHOWNONE> and C<DTS_UPDOWN> style bits derived from C<format>/C<show_none>/
+C<useynavigate>. Mount and live changes write the ISO value with C<DTM_SETSYSTEMTIME> (C<GDT_NONE> when
+the value is empty) and the natural range with C<DTM_SETRANGE>; user edits surface via
+C<DTN_DATETIMECHANGE>, read back through C<DTM_GETSYSTEMTIME>, and are completed to C<'YYYY-MM-DD'>.
+Requires C<ICC_DATE_CLASSES>.
+
 The buddy's own hot-track/click repaints can erase its arrow glyphs under the poll-based pump (seen on dark-mode +
 Strawberry). Two driver-side guards keep the arrows rendered: a deterministic C<InvalidateRect>+C<UpdateWindow> right
 after mount, and C<_repaint_active_spin_arrows> (called from C<poll_events> every tick) which repaints any spin buddy
@@ -205,6 +238,36 @@ the cursor is currently over (plus one repaint on the cursor-exit transition).
 =item C<progress_bar> - C<msctls_progress32>, plain determinate (smooth), range/position via
 C<PBM_SETRANGE32>/C<PBM_SETPOS>. Requires C<ICC_PROGRESS_CLASS>.
 
+=item C<spinner> - an animated activity indicator with NO native "busy" control: comctl32's
+C<PBM_SETMARQUEE> needs the comctl32 v6 manifest this app avoids, so the driver draws its own. It
+pre-renders 12 HICON frames of a GDI+ C<GdipDrawLineI> spoke fan (a bright head watching dimming
+towards the tail; the anti-aliased pen comes from C<GdipCreatePen1> - note the pen must be passed to
+draw calls as the RAW pointer value, not the malloc'd Affix I<object>) and hosts it on a STATIC
+C<SS_ICON | SS_CENTERIMAGE> child. Each spinner arms a WM_TIMER (id = its control id, so the shared
+C<_ctrl_msg> WM_TIMER branch looks it up in the registry and advances the I<frame>/C<STM_SETICON>
+cycle; the same message number the app wndproc already uses for its drag-modal pump at id 1);
+setting C<running> =E<gt> 0> disarms it via the C<set_prop('running')> path. This is why the C<GdipDrawArc>
+flat API is NOT affixed: its six C<Float> args mis-marshal under the current Affix and crash the
+caller, hence integer C<GdipDrawLineI> only.
+
+=item C<image> - a STATIC C<SS_BITMAP> picture holder. The shared GDI+ loader decodes a file path or
+C<data:image/...;base64,..> URI and rasters it into the widget's EXACT box (reuse of C<_raster_hbitmap>,
+cached per src@w@h@fit), then C<STM_SETIMAGE> with wParam = C<IMAGE_BITMAP> (0). C<object_fit>
+maps to C<contain> (centred letterbox), C<cover> (centre crop) or C<fill> (stretch); transparent
+pixels composite onto the dialog-face colour because a GDI STATIC draws the bitmap opaquely. The GIANT
+pain: the picture is re-rastered on every C<move_widget> that changes w x h (the layout fixes the box
+after mount), so the mount default 16x16 never survives to screen.
+
+=item C<canvas> - a dedicated C<UjiCanvasClassN> child (a per-instance window class whose proc handles
+WM_PAINT + WM_ERASEBKGND) that draws the node's C<on_draw> into a GDI+ back-buffer the exact size of
+the client rect: create a bitmap (C<PixelFormat32bppPARGB>), clear it to C<background>, run the callback
+through L<Uji::Draw> (the GDI+ implementation L<Uji::Draw::Win32>), composite to an HBITMAP and BitBlt
+it SRCCOPY. WM_ERASEBKGND returns 1 so nothing
+else paints (no flicker, no background flash); the control is invalidated at mount, on resize, when the
+reconciler sets C<on_draw>/C<redraw>, and by C<move_widget> when its box changes. The paint reads the
+CURRENT node (the registry is kept fresh), so a reconciled callback or background is picked up on the
+next repaint with no cached state to sync.
+
 =item C<toggle_switch> / C<toggle_button> - a C<BUTTON> with C<BS_AUTOCHECKBOX | BS_PUSHLIKE>
 (C<0x50001003>): auto-toggles itself on click and reads back via C<BM_GETCHECK>, exactly like a checkbox
 but rendered as a sticky pushed button.
@@ -212,6 +275,15 @@ but rendered as a sticky pushed button.
 =item C<link_button> - a C<BUTTON> with C<BS_FLAT> (C<0x50008000>): an edge-less click target that posts
 the same C<BN_CLICKED> notification as a plain button. (A true C<SysLink> would require the comctl32 v6
 manifest; BS_FLAT keeps the app manifest-free.)
+
+=item C<toolbar> - C<ToolbarWindow32>. Labels go into the native string table with C<TB_ADDSTRINGW>, which
+requires C<wParam = 0> and a double-null-terminated UTF-16 buffer (passing a count or a single terminator
+makes it return -1 and the button stays blank). Per-button C<icon> specs are decoded to HICONs through the
+GDI+ flat API (gdiplus.dll - note the export is C<GdipLoadImageFromFile>, not C<...W>) and collected into a
+per-toolbar C<ImageList> (ILC_COLOR32) attached with C<TB_SETIMAGELIST>. Gotcha: the driver's C<SendMessageW>
+declares C<lParam> as C<SSize_t>, so a boxed Affix pointer REF must be unwrapped with C<Affix::address>
+before use - passing the REF itself marshals the SV's own address (the same quirk applies anywhere a pointer
+is written into a struct field).
 
 =back
 
@@ -254,7 +326,8 @@ SW_MAXIMIZE SW_RESTORE SW_SHOW SW_HIDE MSWin32 hashref hwnd testbackends FFI XS 
 msctls_trackbar32 msctls_updown32 msctls_progress32 UDM_SETRANGE32 UDM_SETPOS32 UDM_GETPOS32 UDM_SETACCEL UDACCEL
 UDS_ARROWKEYS PBM_SETRANGE32 PBM_SETPOS SSize_t sab listbox combobox productization testbackends ES_PASSWORD
 ES_MULTILINE ES_AUTOVSCROLL ES_AUTOHSCROLL WS_TABSTOP WS_VSCROLL recreate_node mount-only mountonly DefWindowProcW
-wParam lParam COLOR_WINDOW COLOR_BTNFACE DC
+wParam lParam COLOR_WINDOW COLOR_BTNFACE DC GdipLoadImageFromFile ImageList TB_SETIMAGELIST ILC_COLOR32
+ToolbarWindow32 TB_ADDSTRINGW TB_ADDBUTTONSW TB_BUTTONSTRUCTSIZE TB_AUTOSIZE HICON HIML
 
 =end stopwords
 

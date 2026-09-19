@@ -7,6 +7,8 @@ class MockDriver {
     # small "native control state" so we can emulate BM_GETCHECK / BM_SETCHECK round-trips.
     field $channel  : writer(init);
     field $resize   : writer(set_resize_handler);
+    field $close_req : writer(set_close_request_handler);
+    field $dark      : param = 0;    # simulated colour scheme (0 = light, 1 = dark)
     field $registry : reader = {};    # id => { hwnd => id, node => $node }
     field $calls    : reader = [];    # [ $method, @args ]
     field $checks   : reader = {};    # id => checked state (0/1)
@@ -18,6 +20,7 @@ class MockDriver {
 
     #
     method poll_events {1}
+    method uses_dark_mode { $dark ? 1 : 0 }
     method mount   ($t) { $mounted = 1; $vtree = $t; $t->set_bounds( 0, 0, 360, 400 ); $mounts->{ $t->id } = 1; 1 }
     method unmount ($t) { $unmounts->{ $t->id } = 1; delete $mounts->{ $t->id }; 1 }
     method mount_children ($t) { $self->_register($t); 1 }

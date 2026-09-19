@@ -13,7 +13,7 @@ use Encode qw[decode encode];
 #
 skip_all 'Win32 only' unless $^O eq 'MSWin32';
 
-# ── Tree-view constants ──────────────────────────────────────────────────────
+#  Tree-view constants
 my $TVM_INSERTITEMW   = 0x1132;
 my $TVM_DELETEITEM    = 0x1101;
 my $TVM_EXPAND        = 0x1102;
@@ -34,13 +34,13 @@ my $chan              = Acme::Parataxis::Channel->new( capacity => 1024 );
 my $drv               = Uji::Driver::Win32->new;
 $drv->init($chan);
 
-# ── Set up a window containing a tree_view ───────────────────────────────────
+#  Set up a window containing a tree_view
 #
-# Alpha (expanded) ─┬─ A-one
-#                   └─ A-two
-# Bravo ───────────┬─ B-one
-#                  ├─ B-two
-#                  └─ B-three
+# Alpha (expanded) ┬ A-one
+#                   └ A-two
+# Bravo ┬ B-one
+#                  ├ B-two
+#                  └ B-three
 # Charlie
 my $tree = Uji::tree_view(
     value => 'b1',
@@ -74,7 +74,7 @@ my $wrb = $drv->_get_registry_record( $vtree->id );
 my $tr  = $drv->_get_registry_record( $tree->id );
 ok $tr && $tr->{hwnd}, 'tree_view has a registry record with a real HWND';
 
-# ── 1. Class name is SysTreeView32 ───────────────────────────────────────────
+#  1. Class name is SysTreeView32
 my $cls = '';
 {
     my $buf = Affix::malloc(128);
@@ -85,11 +85,11 @@ my $cls = '';
 }
 is $cls, 'SysTreeView32', 'mounts SysTreeView32';
 
-# ── 2. Item count: 3 root + 2 under A + 3 under B = 8 ──────────────────────
+#  2. Item count: 3 root + 2 under A + 3 under B = 8
 my $count = Uji::Driver::Win32::SendMessageW( $tr->{hwnd}, $TVM_GETCOUNT, 0, 0 );
 is $count, 8, 'TVM_GETCOUNT returns 8 items';
 
-# ── 3. Expanded item has TVIS_EXPANDED ───────────────────────────────────────
+#  3. Expanded item has TVIS_EXPANDED
 my $root_h  = Uji::Driver::Win32::SendMessageW( $tr->{hwnd}, $TVM_GETNEXTITEM, $TVGN_ROOT, 0 );
 my $alpha_h = $root_h;                                                                                   # the first root item IS Alpha
 my $bravo_h = Uji::Driver::Win32::SendMessageW( $tr->{hwnd}, $TVM_GETNEXTITEM, $TVGN_NEXT, $alpha_h );
@@ -97,13 +97,13 @@ ok $alpha_h, 'first root child (Alpha) handle resolved';
 my $exp_st = Uji::Driver::Win32::SendMessageW( $tr->{hwnd}, $TVM_GETITEMSTATE, $alpha_h, $TVIS_EXPANDED );
 ok $exp_st & $TVIS_EXPANDED, 'Alpha node is expanded';
 
-# ── 4. Selection: B-one is selected per model value='b1' ────────────────────
+#  4. Selection: B-one is selected per model value='b1'
 my $bone_h = Uji::Driver::Win32::SendMessageW( $tr->{hwnd}, $TVM_GETNEXTITEM, $TVGN_CHILD, $bravo_h );
 ok $bone_h, 'Bravo first child (B-one) handle resolved';
 my $sel_st = Uji::Driver::Win32::SendMessageW( $tr->{hwnd}, $TVM_GETITEMSTATE, $bone_h, $TVIS_SELECTED );
 ok $sel_st & $TVIS_SELECTED, 'B-one is selected as per model value';
 
-# ── 5. lParam round-trip: B-one's lParam == 4 (the slot index) ──────────────
+#  5. lParam round-trip: B-one's lParam == 4 (the slot index)
 {
     my $bytes = pack( 'L< x4 q< L< L< q< l< l< l< l< q<', 0x4, $bone_h, 0, 0, 0, 0, 0, 0, 0, 0 );    # TVIF_PARAM mask, hItem
     my $buf   = Affix::malloc( length $bytes );
@@ -115,7 +115,7 @@ ok $sel_st & $TVIS_SELECTED, 'B-one is selected as per model value';
     is $lp, 4, 'B-one lParam round-trips to slot 4';
 }
 
-# ── 6. TVN_SELCHANGED: simulate a click on slot 7 (value='c', Charlie) ──────
+#  6. TVN_SELCHANGED: simulate a click on slot 7 (value='c', Charlie)
 {
     my $nm = "\0" x 152;
     substr( $nm, 0, 8 )   = pack( 'q<', $tr->{hwnd} );                                      # NMHDR.hwndFrom
@@ -134,7 +134,7 @@ ok $sel_st & $TVIS_SELECTED, 'B-one is selected as per model value';
     is $msg->{value}, 'c',      'channel message value is Charlie';
 }
 
-# ── 7. set_prop('value'): move selection to 'a1' (A-one) ────────────────────
+#  7. set_prop('value'): move selection to 'a1' (A-one)
 {
     $drv->set_prop( $tree->id, 'value', 'a1' );
     my $aone_h = Uji::Driver::Win32::SendMessageW( $tr->{hwnd}, $TVM_GETNEXTITEM,  $TVGN_CHILD, $alpha_h );
@@ -142,7 +142,7 @@ ok $sel_st & $TVIS_SELECTED, 'B-one is selected as per model value';
     ok $st & $TVIS_SELECTED, 'set_prop value moves selection to A-one';
 }
 
-# ── 8. Reconciler: change nodes (add a root item 'd') + change value ────────
+#  8. Reconciler: change nodes (add a root item 'd') + change value
 {
     my $recon    = Uji::Reconciler->new;
     my $old_tree = Uji::tree_view( value => 'a1', nodes => $tree->nodes, expanded => ['a'], );
@@ -164,7 +164,7 @@ ok $sel_st & $TVIS_SELECTED, 'B-one is selected as per model value';
     ok $cst & $TVIS_SELECTED, 'reconciled value change moves selection to Charlie';
 }
 
-# ─── clean up ───
+#  clean up
 Uji::Driver::Win32::SendMessageW( $wrb->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE
 #
 done_testing;

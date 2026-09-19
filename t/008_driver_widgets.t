@@ -64,12 +64,12 @@ ok $msg, 'spin arrow produced a channel message';
 is $msg && $msg->{type},  'SET_LEVEL', 'spin arrow message type';
 is $msg && $msg->{value}, 50,          'spin arrow reports the new position';
 
-# ─── Progress bar ───
+# Progress bar
 is Uji::Driver::Win32::SendMessageW( $bar_r->{hwnd}, 0x0408, 0, 0 ), 40, 'progress bar starts at value 40';
 $drv->set_prop( $bar->id, 'value', 75 );
 is Uji::Driver::Win32::SendMessageW( $bar_r->{hwnd}, 0x0408, 0, 0 ), 75, 'set_prop moves the progress bar';
 
-# ─── Toggle switch / toggle button (BM_GETCHECK round-trip through BN_CLICKED) ───
+# Toggle switch / toggle button (BM_GETCHECK round-trip through BN_CLICKED)
 is Uji::Driver::Win32::SendMessageW( $sw_r->{hwnd}, 0x00F0, 0, 0 ), 0, 'toggle switch starts unchecked';
 is Uji::Driver::Win32::SendMessageW( $tb_r->{hwnd}, 0x00F0, 0, 0 ), 1, 'toggle button starts checked';
 $chan->get() while $chan->size;
@@ -93,7 +93,7 @@ is $msg3 && $msg3->{value}, 0,             'toggle button reports the checked st
 $drv->set_prop( $sw->id, 'checked', 0 );
 is Uji::Driver::Win32::SendMessageW( $sw_r->{hwnd}, 0x00F0, 0, 0 ), 0, 'set_prop unchecked the toggle switch';
 
-# ─── Link button: static hashref message on BN_CLICKED ───
+# Link button: static hashref message on BN_CLICKED
 $chan->get() while $chan->size;
 Uji::Driver::Win32::SendMessageW( $parent, 0x0111, ( 0 << 16 ) | $lk->id, 0 );    # BN_CLICKED
 my $msg4 = $chan->size ? $chan->get : undef;

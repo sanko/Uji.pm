@@ -1,0 +1,104 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Calendar - a composed month-grid calendar
+
+=head1 SYNOPSIS
+
+    Uji::column( children => [
+        Uji::calendar(
+            month     => '2026-05',
+            value     => '2026-05-04',
+            min       => '2026-05-01',
+            max       => '2026-05-31',
+            on_select => sub ($iso) { { type => 'PICKED', value => $iso } },
+            on_nav    => sub ($delta) { { type => 'MONTH', delta => $delta } }
+        )
+    ] );
+
+=head1 DESCRIPTION
+
+A month calendar built from ordinary toolkit controls rather than a native picker class: the node
+expands into a C<◀> month-title C<▶> header, a weekday-letter row, and six rows of day cells,
+all under the calendar's C<children>. This is deliberate: a native C<SysMonthCal32> was prototyped but
+proved unreliable in some environments (inert MCM_* messages and heap corruption on destroy), so the
+composed grid reuses the exact VDOM/Layout/driver pipeline every other widget uses.
+
+Picking a day fires C<on_select> with the ISO date; the C<◀>/C<▶> header buttons fire C<on_nav>
+with C<-1>/C<+1> so the model can step C<month> and re-render. Days outside C<min>/C<max> are
+disabled, and the selected day cell is highlighted C<#BBD8F4>.
+
+=head2 Parameters
+
+=over
+
+=item C<month>
+
+The displayed month as C<'YYYY-MM'>. Defaults to C<value>'s month, or the current month.
+
+=item C<value>
+
+The selected day as ISO C<'YYYY-MM-DD'>.
+
+=item C<min>, C<max>
+
+ISO boundaries; day cells outside the range are disabled.
+
+=item C<on_select>
+
+C<sub ($iso)>, fired when a day cell is clicked. Return a message hashref (put on the channel) or
+C<undef>.
+
+=item C<on_nav>
+
+C<sub ($delta)>, fired by the C<-1>/C<+1> header buttons. Return a message hashref or C<undef>.
+
+=item C<padding>, C<spacing>
+
+Grid chrome: outer padding (default 8) and row spacing (default 2, 0 for week rows).
+
+=back
+
+=head2 Re-rendering
+
+The reconciler treats the calendar's rendered grid (month/value/min/max plus every cell) as one
+semantic unit: any change unmounts and re-mounts the cell subtree wholesale, because the generated
+cell ids change every render and per-cell patching cannot follow a cell slot that was a blank spacer
+in the previous frame (see L<Uji::Reconciler>).
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<calendar>)
+
+=item * L<Uji::Node::DatePicker> - the native drop-down date picker
+
+=item * L<Uji::Node::Row>, L<Uji::Node::Button>, L<Uji::Node::Text> - the grid's building blocks
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+grid month week picker re-mounts CSS
+
+=end stopwords
+
+=cut

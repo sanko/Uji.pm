@@ -20,6 +20,7 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
     field $driver        : param //= Uji::Driver::detect();
     field $reconciler    : param //= Uji::Reconciler->new();
     field $layout        : param //= Uji::Layout->new( driver => $driver );
+    field $dark_mode      = undef;    # boot-time snapshot of the driver colour scheme
 
     sub _now_ms () { return Time::HiRes::time() * 1000 }
 
@@ -78,6 +79,7 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
 
     method _boot () {
         ( $model, my $cmd ) = $init->();
+        $dark_mode = $driver->uses_dark_mode() if $driver->can('uses_dark_mode');
         $self->_mount;
         $self->_sync_subscriptions;
     }
@@ -150,12 +152,24 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
         return;
     }
 
-    # Resolve the messages of every event subscription of one kind (currently 'resize').
-    method _event_sub_messages ($kind) {
+    # Resolve the messages of every event subscription of one kind ('resize', 'focus', 'blur',
+    # 'close_request', 'key_chord'). An optional platform event hashref filters subs carrying a
+    # matcher: focus/blur subs granting an C<id> only fire when it matches the event's node id,
+    # and key_chord subs only fire when their canonical chord matches the event's.
+    method _event_sub_messages ( $kind, $event = undef ) {
         my $now = _now_ms();
         my @out;
         for my $sub ( values %$active_subs ) {
             next unless $sub->{kind} eq $kind;
+            if ( defined $event && $kind eq 'focus' ) {
+                next if defined $sub->{id} && $sub->{id} ne $event->{focus_id};
+            }
+            elsif ( defined $event && $kind eq 'blur' ) {
+                next if defined $sub->{id} && $sub->{id} ne $event->{blur_id};
+            }
+            elsif ( defined $event && $kind eq 'key_chord' ) {
+                next if $sub->{chord} && $sub->{chord} ne $event->{chord};
+            }
             my $msg = _resolve_msg( $sub, $now );
             push @out, $msg if defined $msg;
         }
@@ -203,13 +217,27 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
         push @batch, $channel->get() while $channel->size;
 
         # WM_SIZE is reserved: the resize handler has already re-laid-out the tree, so the app
-        # itself has no update() for it. Translate it into the messages of any resize
-        # subscriptions instead, then fall through so the re-render below still runs.
+        # itself has no update() for it. The same applies to FOCUS/BLUR/KEY_CHORD: those are
+        # translated into the matching subscriptions' messages directly (an app update() never sees
+        # the raw platform event). CLOSE_REQUEST stays on the driver seam (see
+        # _handle_close_request).
         my @work;
         for my $m (@batch) {
             exit(0) if ref $m eq 'HASH' && $m->{type} eq 'QUIT';
             if ( ref $m eq 'HASH' && $m->{type} eq 'RESIZE' ) {
                 push @work, $self->_event_sub_messages('resize');
+                next;
+            }
+            if ( ref $m eq 'HASH' && $m->{type} eq 'FOCUS' ) {
+                push @work, $self->_event_sub_messages( 'focus', $m );
+                next;
+            }
+            if ( ref $m eq 'HASH' && $m->{type} eq 'BLUR' ) {
+                push @work, $self->_event_sub_messages( 'blur', $m );
+                next;
+            }
+            if ( ref $m eq 'HASH' && $m->{type} eq 'KEY_CHORD' ) {
+                push @work, $self->_event_sub_messages( 'key_chord', $m );
                 next;
             }
             push @work, $m;
@@ -223,9 +251,37 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
         $self->_sync_subscriptions;
     }
 
+    # A close gesture (title-bar X, Alt+F4, WM_CLOSE) asks the app whether it may close. Every
+    # close_request subscription gets a synchronous pass through update(); a message handled with
+    # an undef command is consent (the window closes), while ANY defined return value vetoes the
+    # close and the window stays open. $surface_id is reserved for multi-window suites. Returns
+    # a truthful veto flag for the driver's CW_CLOSE guard: 1 = may close, 0 = veto.
+    method _handle_close_request ( $surface_id = undef ) {
+        my @msgs = $self->_event_sub_messages('close_request');
+        return 1 unless @msgs;
+        my $veto = 0;
+        for my $m (@msgs) {
+            ( my $new_model, my $cmd ) = $update->( $m, $model );
+            $model = $new_model;
+            $veto = 1 if defined $cmd;
+        }
+        $self->_render;
+        $self->_sync_subscriptions;
+        return $veto ? 0 : 1;
+    }
+
+    # The platform colour scheme at boot: true when the driver reports dark mode (auto-detected
+    # from the OS, or forced via the driver's dark_mode option). Snapshotted by _boot so a
+    # mid-run OS theme toggle does not flip already-painted windows.
+    method uses_dark_mode () {
+        return $dark_mode // 0;
+    }
+
     method run () {
         $driver->init($channel);
         $driver->set_resize_handler( sub { $self->_relayout_now(@_) } );
+        $driver->set_close_request_handler( sub { $self->_handle_close_request($_[0]) } )
+            if $driver->can('set_close_request_handler');
         $driver->set_modal_pump( sub { $self->_pump_modal } ) if $driver->can('set_modal_pump');
         async {
             $self->_boot;

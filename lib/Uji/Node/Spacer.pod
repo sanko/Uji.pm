@@ -1,0 +1,58 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Spacer - invisible flexible whitespace
+
+=head1 SYNOPSIS
+
+    Uji::row(
+        children => [
+            Uji::button( label => 'OK' ),
+            Uji::spacer( flex => 1 ),          # pushes the button to the right edge
+            Uji::button( label => 'Cancel' )
+        ]
+    );
+
+=head1 DESCRIPTION
+
+A Spacer is a layout-only leaf that never mounts a native control. Its intrinsic box is (0,0) and
+its declared box comes exclusively from the usual properties: C<flex> (claim leftover main-axis
+space), C<w>/C<h> (a fixed gap), and C<min_w>/C<min_h>/C<max_w>/C<max_h> clamps. Use it anywhere a
+cell needs padding or has a button aligned away from the edge.
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<spacer>)
+
+=item * L<Uji::Layout>
+
+=item * L<Uji::Node::Row>
+
+=item * L<Uji::Node::Column>
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+=end stopwords
+
+=cut

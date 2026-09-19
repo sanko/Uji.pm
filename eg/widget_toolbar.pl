@@ -19,26 +19,27 @@ package main {
     sub view ($model) {
         Uji::window(
             title    => 'Uji Toolbar Demo',
-            w        => 380,
-            h        => 140,
+            w        => 420,
+            h        => 150,
             centered => 1,
             child    => Uji::column(
                 padding  => 10,
                 spacing  => 10,
                 children => [
                     Uji::toolbar(
-                        buttons => [
-                            { label => 'New',    id => 'new', checked => 1, },
-                            { label => 'Open',   id => 'open' },
-                            { label => '',       id => 'sep', separator => 1 },
-                            { label => 'Save',   id => 'save' },
-                            { label => 'Delete', id => 'del' },
+                        icon_size => 16,
+                        buttons   => [
+                            { label => 'New',    id => 'new',    checked => 1, icon => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR4nGP8z8Dwn4EIwERQxQwwAAAoWgHJi0x4WQAAAABJRU5ErkJggg==' },
+                            { label => 'Open',   id => 'open',   icon => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR4nGP8z8Dwn4EIwERQxQwwAAAoWgHJi0x4WQAAAABJRU5ErkJggg==' },
+                            { label => '',       id => 'sep',    separator => 1 },
+                            { label => 'Save',   id => 'save',   icon => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR4nGP8z8Dwn4EIwERQxQwwAAAoWgHJi0x4WQAAAABJRU5ErkJggg==' },
+                            { label => 'Delete', id => 'del' }
                         ],
-                        on_click => sub ($id) { { type => 'TB_CLICK', id => $id } },
+                        on_click => sub ($id) { { type => 'TB_CLICK', id => $id } }
                     ),
-                    Uji::text( 'Last action: ' . $model->{last_clicked} ),
-                ],
-            ),
+                    Uji::text( 'Last action: ' . $model->{last_clicked} )
+                ]
+            )
         );
     }
     Uji::app( init => \&init, update => \&update, view => \&view )->run();

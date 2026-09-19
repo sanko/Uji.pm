@@ -174,6 +174,7 @@ ignore the event). The arguments differ per widget:
                 on_input  -> sub ($text)  { ... }   # full text string
     slider      on_change -> sub ($value) { ... }   # numeric position
     spin_box    on_change -> sub ($value) { ... }   # numeric position
+    date_picker on_change -> sub ($iso)   { ... }   # ISO-8601 'YYYY-MM-DD' ('' when cleared)
     checkbox    on_toggle -> sub ($on)    { ... }   # 1 or 0
     toggle_switch / toggle_button
                 on_toggle -> sub ($on)    { ... }   # 1 or 0
@@ -542,6 +543,50 @@ Callback receiving the new numeric position. Returns a message (or C<undef>).
 
 =back
 
+=head2 C<date_picker ( %args )>
+
+A calendar/date entry control presenting an ISO-8601 C<YYYY-MM-DD> value. Purely a date picker in this
+release (Win32 builds it from C<SysDateTimePick32>).
+
+    Uji::date_picker(
+        value     => $model->{date},
+        format    => 'short',          # 'short' | 'long' | 'time'
+        min       => '2020-01-01',
+        max       => '2030-12-31',
+        show_none => 1,                # a checkbox that clears the date
+        on_change => sub ($iso) { { type => 'SET_DATE', value => $iso } }
+    );
+
+=over
+
+=item C<value>
+
+Current date as C<'YYYY-MM-DD'>, or C<undef> for no date at all. Recomposed live.
+
+=item C<min> / C<max>
+
+Natural (inclusive) date range as C<'YYYY-MM-DD'>; C<undef> for unbounded. Recomposed live.
+
+=item C<format>
+
+C<'short'> (default), C<'long'> or C<'time'>. Mount-time only; changing it live recreates the control.
+
+=item C<show_none>
+
+When true, the picker shows a checkbox the user can uncheck to mean "no date"; the change callback
+then receives the empty string. Default false. Mount-time only.
+
+=item C<useynavigate>
+
+When true, the picker uses up/down arrows instead of the calendar dropdown. Default false. Mount-time only.
+
+=item C<on_change>
+
+Callback receiving the newly chosen date as C<'YYYY-MM-DD'> (C<''> when the date was cleared). Returns a
+message (or C<undef>).
+
+=back
+
 =head2 C<progress_bar ( %args )>
 
 A determinate progress (percentage-style) bar. Purely presentational; no callbacks.
@@ -557,6 +602,35 @@ Current fill position. Default 0.
 =item C<min> / C<max>
 
 Range endpoints. Defaults 0 / 100.
+
+=back
+
+=head2 C<spinner ( %args )>
+
+An animated, indeterminate activity indicator (see L<Uji::Node::Spinner>): a rotating fan of
+spokes sized to a C<size>-pixel square, drawn as an anti-aliased GDI+ icon fan with a dimming tail.
+The driver pre-renders a dozen HICON frames and swaps them on an SS_ICON static host, clocked by a
+dedicated WM_TIMER (id = the control id). Patch C<running> to start/stop.
+
+    Uji::spinner( size => 28, color => '#0081C8', speed => 40, running => $model->{busy} );
+
+=over
+
+=item C<size>
+
+Square size in pixels. Default 24 (clamped to >= 16).
+
+=item C<color>
+
+Spoke colour C<'#RRGGBB'>. Default C<'#2e5d8c'>.
+
+=item C<speed>
+
+Milliseconds per frame. Default 80. Recomposed live (re-arms the timer).
+
+=item C<running>
+
+C<1> to animate, C<0> to freeze. Default 1. Recomposed live.
 
 =back
 
@@ -1065,14 +1139,16 @@ A callback receiving the selected item's C<value>. Return a message (or C<undef>
 
 =head2 C<toolbar ( %args )>
 
-A horizontal row of text actions with optional separators.
+A horizontal row of actions (text, optional per-button C<icon>) with optional separators.
 
     Uji::toolbar(
+        icon_size => 16,
         buttons => [
-            { label => 'New',   id => 'new' },
-            { label => 'Open',  id => 'open' },
-            { label => '',        id => 'sep', separator => 1 },
-            { label => 'Save',  id => 'save', checked => 1 },
+            { label => 'New', id => 'new', checked => 1,
+              icon  => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR4nGP8z8Dwn4EIwERQxQwwAAAoWgHJi0x4WQAAAABJRU5ErkJggg==' },
+            { label => 'Open', id => 'open' },
+            { label => '',     id => 'sep', separator => 1 },
+            { label => 'Save', id => 'save' },
         ],
         on_click => sub ($id) { { type => 'TB_CLICK', id => $id } }
     );
@@ -1081,12 +1157,19 @@ A horizontal row of text actions with optional separators.
 
 =item C<buttons>
 
-An arrayref of C<< { label => '...', id => '...', separator => 0, checked => 0, enabled => 1 } >> descriptors. Default
-C<[]>. Recomposed live by rebuilding the native button set.
+An arrayref of C<< { label => '...', id => '...', separator => 0, checked => 0, enabled => 1, icon => '', width => 0 } >>
+descriptors. Default C<[]>. Recomposed live by rebuilding the native button set.
+
+C<icon> (any button) is a file path or C<data:image/...;base64,...> PNG/JPEG data URI; buttons that reference the same
+spec share one image slot. C<width> sizes a separator (default 6).
 
 =item C<on_click>
 
 A callback receiving the clicked button's C<id>. Return a message (or C<undef>).
+
+=item C<icon_size>
+
+Square icon size in pixels (default C<16>). A mount-only parameter.
 
 =back
 
@@ -1124,6 +1207,196 @@ A callback receiving the chosen leaf item's C<id>. Return a message (or C<undef>
 =back
 
 The window's client area shrinks by the height of the native menu band; layout runs against the reduced area.
+
+=head2 C<separator ( %args )>
+
+A thin ruled divider line between siblings. In a column it draws a horizontal rule spanning the column width; in a row, a
+vertical rule spanning the row height. It mounts a C<STATIC> control with the C<SS_ETCHEDHORZ>/C<SS_ETCHEDVERT> style; the
+rule thickness (3px) and automatic cross-axis span come from layout.
+
+    Uji::column( children => [
+        Uji::text('Above'),
+        Uji::separator(),                 # horizontal rule across the column
+        Uji::text('Below'),
+    ] );
+
+=over
+
+=item C<orientation>
+
+C<'horizontal'> (default, for columns) or C<'vertical'> (for rows). A mount-only parameter.
+
+=back
+
+=head2 C<search_input ( %args )>
+
+A single-line search field (see L<Uji::Node::SearchInput>): a plain C<EDIT> with an optional leading
+18px C<E<0x2715>>-clearing button. Typing fires C<on_input> with the live text; clicking the C<E<0x2715>>
+button empties the field and fires C<on_search('')>. The C<icon> (a C<data:image/...> URI) reuses the
+toolbar's GDI+ loader for the leading glyph and is mount-only.
+
+    Uji::row( children => [
+        Uji::search_input(
+            placeholder => 'Search…',
+            icon        => 'data:image/png;base64,iVBOR…',
+            on_input    => sub ($t) { { type => 'QUERY', text => $t } },
+        ),
+        Uji::button( label => 'Search', on_click => { type => 'RUN_SEARCH' } ),
+    ] );
+
+=over
+
+=item C<value>
+
+The current query text (default C<''>). Programmatic changes show/hide the C<E<0x2715>> button.
+
+=item C<placeholder>
+
+Grey hint text shown while empty.
+
+=item C<icon>
+
+Optional C<data:image/...> URI for the 16px leading glyph. Mount-only.
+
+=item C<on_input>
+
+C<sub ($text)> fired on every keystroke; return a message hashref or C<undef>.
+
+=item C<on_search>
+
+C<sub ($text)> fired when C<E<0x2715>> clears the field. Enter-key submission is not yet wired.
+
+=back
+
+=head2 C<calendar ( %args )>
+
+A month grid (see L<Uji::Node::Calendar>) built from ordinary toolkit controls: a C<E<0x25C0>> month-title
+C<E<0x25B6>> header, a weekday-letter row, and six rows of day cells. Picking a day fires C<on_select> with the
+ISO date; C<E<0x25C0>>/C<E<0x25B6>> fire C<on_nav> with C<-1>/C<+1> so the app can step C<month>. Days outside
+C<min>/C<max> are disabled, and the selected day is highlighted.
+
+    Uji::column( children => [
+        Uji::calendar(
+            month     => '2026-05',
+            value     => '2026-05-04',
+            min       => '2026-05-01',
+            max       => '2026-05-31',
+            on_select => sub ($iso) { { type => 'PICKED', value => $iso } },
+            on_nav    => sub ($d)    { { type => 'MONTH', delta => $d } },
+        ),
+    ] );
+
+=over
+
+=item C<month>
+
+The displayed month as C<'YYYY-MM'> (default: C<value>'s month, else the current month).
+
+=item C<value>
+
+The selected day as ISO C<'YYYY-MM-DD'>; its cell is highlighted (C<#BBD8F4>).
+
+=item C<min>, C<max>
+
+ISO boundaries; day cells outside the range are disabled.
+
+=item C<on_select>
+
+C<sub ($iso)> fired when a day cell is clicked; return a message hashref or C<undef>.
+
+=item C<on_nav>
+
+C<sub ($delta)> fired by the C<E<0x25C0>>/C<E<0x25B6>> header buttons (C<-1>/C<+1>); step C<month> in your
+view function and return a message.
+
+=back
+
+=head2 C<overlay ( %args )>
+
+A container (see L<Uji::Node::Overlay>) that stacks every child in the SAME plane: array order is the
+draw order, later layers painting over earlier ones - the toolkit's version of CSS absolute
+positioning. Each layer sizes itself by the usual rules and is offset within the box by its
+C<align_w>/C<align_h>, so a corner "badge" on top of a full-frame layer is a one-liner.
+
+    Uji::overlay(
+        children => [
+            Uji::text( 'A demo frame', w => 388, h => 180, align => 'center' ),
+            Uji::button( label => '5 hits', fit => 'content', align_w => 'end', align_h => 'end' ),
+        ],
+    );
+
+=over
+
+=item C<children>
+
+The layers, in draw order (last on top). Recomposed live.
+
+=item C<padding>
+
+Inset around the shared layer box. Default C<0>. Recomposed live.
+
+=back
+
+=head2 C<image ( %args )>
+
+A static raster widget (see L<Uji::Node::Image>): displays a picture - from a file path or a
+C<data:image/...;base64,..> URI - sized to its natural raster dims, an explicit C<w>/C<h>, or a mix
+of the two (the free axis follows the aspect ratio). The picture is rasterized into the widget's
+box by the driver, with C<object_fit> controlling the mapping.
+
+    Uji::image(
+        src        => 'logo.png',          # or data:image/png;base64,...
+        w          => 160,
+        h          => 70,
+        object_fit => 'contain',           # contain | cover | fill
+    );
+
+=over
+
+=item C<src>
+
+A file path or a C<data:image/I<type>;base64,..> URI. Recomposed live.
+
+=item C<alt>
+
+An accessible description (unused by the Win32 driver).
+
+=item C<object_fit>
+
+C<contain> (default): the whole image fits inside the box, centred. C<cover>: the box is filled,
+excess cropped. C<fill>: stretched to the box, ignoring the aspect. Recomposed live.
+
+=back
+
+=head2 C<canvas ( %args )>
+
+A raw 2D drawing surface (see L<Uji::Node::Canvas>): a frameless box whose content is a callback.
+C<on_draw> receives a L<Uji::Draw> session already cleared to C<background> and sized to the laid-out
+box; it redraws on every WM_PAINT and whenever C<redraw> is bumped by a render.
+
+    Uji::canvas(
+        w          => 320,
+        h          => 220,
+        background => '#F0F0F0',
+        on_draw    => sub ($d) {
+            $d->clear('#FFFFFF');
+            $d->color('#CC0000');
+            $d->rect( 2, 2, $d->size );
+        },
+    );
+
+=over
+
+=item C<on_draw>
+
+A C<Coderef> receiving the one L<Uji::Draw> session. Recomposed live (a changed callback repaints).
+
+=item C<redraw>
+
+An unsigned bump counter; a changed value invalidates the surface so a repaint follows. The canvas has
+no intrinsic content, so its natural box is (200, 100) unless an explicit C<w>/C<h> is given.
+
+=back
 
 =head1 COMMON NODE PARAMETERS
 
@@ -1230,7 +1503,11 @@ L<Uji::Node::ToggleButton>, L<Uji::Node::LinkButton>, L<Uji::Node::Radio>, L<Uji
 L<Uji::Node::ComboBox>, L<Uji::Node::ListBox>, L<Uji::Node::ListView>, L<Uji::Node::TreeView>,
 L<Uji::Node::StatusText>, L<Uji::Node::StatusBar>, L<Uji::Node::GroupBox>, L<Uji::Node::ScrollView>,
 L<Uji::Node::SplitView>, L<Uji::Node::TabPanel>, L<Uji::Node::Toolbar>, L<Uji::Node::MenuBar>,
-L<Uji::Node::Column>, L<Uji::Node::Row>, L<Uji::Node::Window>
+L<Uji::Node::Column>, L<Uji::Node::Row>, L<Uji::Node::Window>, L<Uji::Node::Spacer>, L<Uji::Node::Separator>,
+L<Uji::Node::SearchInput>, L<Uji::Node::Calendar>, L<Uji::Node::Overlay>, L<Uji::Node::Spinner>,
+L<Uji::Node::Image>, L<Uji::Node::Canvas>
+
+=item * L<Uji::Draw> - the GDI+ drawing API handed to a canvas
 
 =item * L<Uji::Layout> - the pure-Perl layout engine
 

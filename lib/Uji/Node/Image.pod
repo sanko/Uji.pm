@@ -1,0 +1,105 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Image - a static raster widget
+
+=head1 SYNOPSIS
+
+    Uji::image(
+        src        => '/path/to/photo.png',           # or data:image/png;base64,...
+        alt        => 'A photo',
+        w          => 320,                             # omit: natural size
+        h          => 200,
+        object_fit => 'contain',                       # contain | cover | fill
+    );
+
+=head1 DESCRIPTION
+
+An C<image> displays a static raster (PNG, JPEG, GIF, ICO, BMP - whatever GDI+ decodes) from a
+file path or a C<data:image/...;base64,..> URI. It is a leaf widget whose natural box is the
+raster's own size; an explicit C<w> or C<h> scales it while preserving the aspect ratio, and
+setting both sizes the box freely.
+
+The driver rasterizes the source into the widget's box on a STATIC C<SS_BITMAP> host, so what you
+see is always scaled (not merely stretched by the control). C<object_fit> controls how the picture
+maps onto that box:
+
+=over
+
+=item C<contain> (default)
+
+The whole image fits inside the box, centred; the box keeps any leftover "letterbox" space.
+
+=item C<cover>
+
+The box is filled completely, cropping the excess from two opposite edges (a centre crop).
+
+=item C<fill>
+
+The image is stretched to the box exactly, ignoring the aspect ratio.
+
+=back
+
+Swap the picture live by re-rendering with a different C<src> or C<object_fit>: both map to the
+driver's C<set_prop> path and re-raster in place, keeping the same control.
+
+=head2 Parameters
+
+=over
+
+=item C<src>
+
+A file path or a C<data:image/I<type>;base64,..> URI. Recomposed live.
+
+=item C<alt>
+
+An accessible description; the Win32 driver currently ignores it.
+
+=item C<object_fit>
+
+One of C<contain> (default), C<cover> or C<fill>. Recomposed live.
+
+=item C<w>, C<h>
+
+Explicit box; when one is zero the other follows the aspect ratio (see L<Uji::Node/Common Parameters>).
+
+=back
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<image>)
+
+=item * L<Uji::Node/Common Parameters> - C<w>/C<h>, C<visible>
+
+=item * L<Uji::Node::Toolbar> - icons reuse the same GDI+ loader
+
+=item * L<Uji::Node::SearchInput> - an icon glyph via the same loader
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+contain cover fill letterbox raster GDI static HBITMAP PNG JPEG GIF ICO BMP
+
+=end stopwords
+
+=cut

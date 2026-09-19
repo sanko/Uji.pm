@@ -1,0 +1,82 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Separator - a thin ruled divider between siblings
+
+=head1 SYNOPSIS
+
+    Uji::column(
+        children => [
+            Uji::text('Above'),
+            Uji::separator(),                # horizontal rule across the column
+            Uji::text('Below'),
+        ],
+    );
+
+    Uji::row(
+        children => [
+            Uji::button( label => 'Save' ),
+            Uji::separator( orientation => 'vertical' ),
+            Uji::button( label => 'Cancel' ),
+        ],
+    );
+
+=head1 DESCRIPTION
+
+A Separator draws a thin etched line dividing adjacent siblings: horizontal across a column
+(crossing the full column width), vertical down a row (crossing the full row height). The rule
+thickness is built into the layout algorithm (3px on the perpendicular axis), and the 
+cross-axis span is automatic, so a separator needs no C<w>/C<h>. On Win32 it is a native
+C<STATIC> control with C<SS_ETCHEDHORZ> (0x10) or C<SS_ETCHEDVERT> (0x11).
+
+=head2 Parameters
+
+=over
+
+=item C<orientation>
+
+C<'horizontal'> (default, for a rule in a column) or C<'vertical'> (for a rule in a row). A
+mount-only parameter: changing it destroys and recreates the native control.
+
+=back
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<separator>)
+
+=item * L<Uji::Layout>
+
+=item * L<Uji::Node::Spacer> - the invisible flexible-whitespace sibling
+
+=item * L<Uji::Node::Row>
+
+=item * L<Uji::Node::Column>
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+ETCHEDHORZ ETCHEDVERT STATIC
+
+=end stopwords
+
+=cut

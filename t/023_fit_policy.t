@@ -20,7 +20,7 @@ sub find_node ( $node, $type ) {
     return undef;
 }
 
-# ── 1. Policy aliases, per-axis override, and validation ─────────────────
+#  1. Policy aliases, per-axis override, and validation
 subtest 'fit_policy resolves aliases and per-axis overrides' => sub {
     is Uji::button( label => 'x', fit => 'stretch' )->fit_policy('w'), 'fill',    'stretch => fill (both axes)';
     is Uji::button( label => 'x', fit => 'fill' )->fit_policy('h'),    'fill',    'fill => fill';
@@ -37,7 +37,7 @@ subtest 'fit_policy resolves aliases and per-axis overrides' => sub {
     ok dies { Uji::text( 'x', fit => 'bogus' )->fit_policy('w') }, 'an unknown policy dies';
 };
 
-# ── 2. Content fit shrinks a leaf to its natural size ────────────────────
+#  2. Content fit shrinks a leaf to its natural size
 subtest 'fit => content hugs content inside a column' => sub {
     my $col = Uji::column(
         padding  => 0,
@@ -56,7 +56,7 @@ subtest 'fit => content hugs content inside a column' => sub {
     is $btns[1]->bx, 0,   'shrunk button stays at the cell origin';
 };
 
-# ── 3. flex now grows a leaf along the main (vertical) axis ──────────────
+#  3. flex now grows a leaf along the main (vertical) axis
 subtest 'flex grows a leaf along the container main axis' => sub {
     my $col = Uji::column(
         padding  => 0,
@@ -74,7 +74,7 @@ subtest 'flex grows a leaf along the container main axis' => sub {
     is $grow->by, 16,  'flex button sits below the text';
 };
 
-# ── 4. fit_h => fill fills the cross axis (here, a row's height) ─────────
+#  4. fit_h => fill fills the cross axis (here, a row's height)
 subtest 'fit_h fill stretches across a row' => sub {
     my $row = Uji::row(
         padding  => 0,
@@ -91,7 +91,7 @@ subtest 'fit_h fill stretches across a row' => sub {
     is $normal->bh, 26,  'a default leaf still hugs its intrinsic height in a row';
 };
 
-# ── 5. min / max clamps on the computed box ──────────────────────────────
+#  5. min / max clamps on the computed box
 subtest 'min/max clamp computed extents' => sub {
     my $col = Uji::column(
         padding  => 0,
@@ -110,7 +110,7 @@ subtest 'min/max clamp computed extents' => sub {
     is $flex->bh, 50,  'max_h caps a flex child';
 };
 
-# ── 6. Explicit w/h still means fixed ────────────────────────────────────
+#  6. Explicit w/h still means fixed
 subtest 'explicit sizes stay fixed' => sub {
     my $col = Uji::column(
         padding  => 0,
@@ -124,7 +124,7 @@ subtest 'explicit sizes stay fixed' => sub {
     is $btn->bh, 40,  'explicit h wins';
 };
 
-# ── 7. Constraints propagate up through a container's natural size ───────
+#  7. Constraints propagate up through a container's natural size
 subtest 'min_w propagates into the parent natural width' => sub {
     my $col = Uji::column(
         padding  => 0,
@@ -135,7 +135,7 @@ subtest 'min_w propagates into the parent natural width' => sub {
     cmp_ok $w, '>=', 300, "a child min_w widens the column's natural size (got $w)";
 };
 
-# ── 8. min/max now live on every node (Window inherits the same fields) ──
+#  8. min/max now live on every node (Window inherits the same fields)
 subtest 'constraints are available on all nodes' => sub {
     is Uji::window( min_w => 300, max_w => 800 )->min_w, 300, 'Window min_w (inherited)';
     is Uji::window( max_h => 600 )->max_h,               600, 'Window max_h (inherited)';

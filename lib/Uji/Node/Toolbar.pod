@@ -30,6 +30,21 @@ Each button is C<< { label => '...', id => '...' } >> with optional boolean C<ch
 separator is indicated by C<< { separator => 1 } >>. Buttons can be dynamically added, removed, or reordered by
 replacing the C<buttons> array in the model; the reconciler diffs the list and rebuilds only when it changes.
 
+Options:
+
+=over
+
+=item * C<icon> - a file path or C<data:image/...;base64,...> data URI. The driver decodes it with GDI+ into a
+square bitmap (alpha preserved) and hands it to a per-toolbar C<ImageList>; every button that references the same
+C<icon> spec reuses the same image slot. Buttons without an C<icon> use C<I_IMAGENONE>.
+
+=item * C<icon_size> - the image list's icon size in pixels (default C<16>). Changing it while mounted rebuilds the
+toolbar (it is a mount-only parameter).
+
+=item * C<width> - for separators only: the divider width in pixels (default C<6>).
+
+=back
+
 =head1 Constructor
 
 =head2 C<new ( %params )>
@@ -42,12 +57,18 @@ You normally use the L<Uji|Uji/toolbar> helper.
 
 Array reference of button descriptors:
 
-    { label => '...', id => '...', separator => 0, checked => 0, enabled => 1 }
+    { label => '...', id => '...', separator => 0, checked => 0, enabled => 1, icon => '', width => 0 }
 
 C<label> is the display text. C<id> is a string used by C<on_click> to identify which button was pressed. C<separator>
-(boolean) renders a thin vertical divider. C<checked> and C<enabled> control the initial native button state.
+(boolean) renders a thin vertical divider. C<checked> and C<enabled> control the initial native button state. C<icon>
+(practical on any button) is a file path or base64 PNG/JPEG data URI rendered at C<icon_size>; buttons sharing the same
+C<icon> spec share one image slot. C<width> (separators only) sets the divider width.
 
 Default C<[]>.
+
+=head4 C<icon_size>
+
+Square icon size in pixels for the image list; default C<16>. Read via C<icon_size>.
 
 =head4 C<on_click>
 
@@ -83,12 +104,18 @@ TBSTYLE_FLAT | TBSTYLE_LIST>. Each button is inserted individually via C<TB_ADDS
 table) and packed into a C<TBBSTRUCT> via C<TB_ADDBUTTONSW>. Each button is assigned a unique C<idCommand> from a
 driver-wide counter starting at 0x4000.
 
+Buttons carrying an C<icon> feed a per-toolbar C<ImageList> (ILC_COLOR32, C<icon_size> square) attached with
+C<TB_SETIMAGELIST>; the C<iBitmap> field of each button points at its icon's slot (or -2 C<I_IMAGENONE>). GDI+ decodes
+the file/data URI into a 32bpp ARGB bitmap, scales it into the icon square, and converts it to an HICON (alpha
+preserved). C<TB_ADDSTRINGW> requires C<wParam = 0> (a raw pointer) and a double-null-terminated UTF-16 buffer; passing
+a count or a single null terminator makes it return -1 so the label never attaches.
+
 Button clicks arrive as C<WM_COMMAND> (C<LOWORD(wParam) = idCommand>, C<HIWORD(wParam) = 0>). The driver maps
 C<idCommand> back to the button's C<id> via the registry record and invokes C<on_click>.
 
-The reconciler diffs C<buttons> using a composite key (C<id|label|separator|checked|enabled|width>). When the list
+The reconciler diffs C<buttons> using a composite key (C<id|label|separator|checked|enabled|width|icon>). When the list
 changes, C<set_prop('buttons')> wipes and re-populates the native toolbar via C<TB_BUTTONCOUNT>, C<TB_DELETEBUTTON>,
-C<TB_ADDSTRINGW>, and C<TB_ADDBUTTONSW>.
+C<TB_ADDSTRINGW>, and C<TB_ADDBUTTONSW>; a stale image list is detached (C<TB_SETIMAGELIST(NULL)>) and destroyed first.
 
 =head1 SEE ALSO
 
@@ -121,7 +148,8 @@ Sanko Robinson - L<https://github.com/sanko>
 =begin stopwords
 
 TBSTYLE_FLAT TBSTYLE_LIST TBSTYLE_BUTTON CCS_TOP TB_ADDBUTTONSW TB_ADDSTRINGW TB_BUTTONCOUNT TB_DELETEBUTTON
-TB_ISBUTTONCHECKED TB_ISBUTTONENABLED idCommand hwnd hashref
+TB_ISBUTTONCHECKED TB_ISBUTTONENABLED TB_SETIMAGELIST I_IMAGENONE ImageList ILC_COLOR32 idCommand hwnd hashref
+icon_size icon width
 
 =end stopwords
 

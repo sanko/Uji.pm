@@ -4,8 +4,10 @@ use Uji::Driver;
 class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
 
     # user32.dll, gdi32.dll
-    use Affix  qw[:memory :types :core];
+    use Affix qw[:memory :types :core];
     use Encode qw[decode encode];
+    use Uji::Draw::Win32;
+    use Uji::Sub ();
     field $channel : reader;
     field $registry = {};
     field $wndproc_cb;
@@ -14,12 +16,16 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     field $tooltip_hwnd    : reader                      = undef;
     field $on_resize       : reader(_get_resize_handler) = undef;
     field $on_modal_pump   : reader(_get_modal_pump)     = undef;    # synchronous tick/render hook for modal loops
+    field $on_close_request : reader(_get_close_request_handler) = undef;    # WM_CLOSE veto hook (Uji::App may veto)
+    field $focus_last      = 0;    # last GetFocus() HWND seen by _track_focus (focus/blur subscriptions)
     field $suppress_events : reader(_is_suppressed)      = 0;
     field $item_pins   = {};                                         # hwnd -> [ malloc'd UTF-16 item strings still referenced by the control ]
     field $brush_cache = {};                                         # '#RRGGBB' -> HBRUSH
     field $font_cache  = {};                                         # 'Name|Size' -> HFONT
     field $cmd_counter = 0x4000
         ; # monotonic idCommand allocator for toolbar buttons AND menu items (WM_COMMAND needs idCommand; IDs in the 0x4000+ range avoid control-id collisions)
+    field $cid_counter = 0x6000;    # allocator for numeric control IDs of string-id nodes (composed widgets: calendar cells, ...)
+    field $cid_to_id   = {};        # control-ID -> node id (reverse map so _get_registry_record can resolve clicks)
     field $toolbar_cmds = {};    # idCommand -> toolbar vnode id (WM_COMMAND routing)
     field $menu_cmds    = {};    # idCommand -> { win_id => surface_id } (WM_COMMAND routing for menu items)
     field $modal_timer  = 0;     # 1 while a frame-drag modal loop drives the WM_TIMER pump
@@ -28,6 +34,17 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     field $prompt_done = 0;      # modal loop exit flag (OK / Cancel / WM_CLOSE)
     field $prompt_value;         # captured text (undef until OK)
 
+    # Toolbar icon loading (GDI+ flat API, lazily started). $icon_cache keys are "spec\@size"
+    # (spec = a file path or a data:image/...;base64,.. URI as given on the button) and values
+    # are HICON handles (ImageList_AddIcon copies the pixels, so the icons live for driver
+    # lifetime and are reused across toolbars).
+    field $gdi_started = 0;      # 1 once GdiplusStartup has run
+    field $gdi_token   = 0;      # GdiplusStartup ULONG_PTR token (unused today: single startup)
+    field $icon_cache  = {};     # "spec\@size" -> HICON
+    field $spin_cache  = {};     # "size\@color" -> [ HICON frame, ... ] for spinner animation
+    field $bitmap_cache = {};    # "spec\@w\@h\@fit" -> HBITMAP (Image widget raster)
+    field $img_dims     = {};    # "spec" -> [ natural_w, natural_h ] from a decode
+
     # Custom window class names are PER-INSTANCE (a monotonic suffix per driver): RegisterClassExW
     # silently no-ops when a class name already exists, and the wndproc closure captures the FIRST
     # registering driver. Two live drivers (e.g. an app + a shared $drv used for dialogs) would
@@ -35,10 +52,13 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     # a second prompt_dialog would never see its own prompt_done flag. Unique names keep each
     # driver's windows bound to its own closure.
     my $class_seq = 0;
+    my $dpi_aware = 0;    # once: SetProcessDpiAwarenessContext has run (per process)
     field $win_class      = '';
     field $viewport_class = '';
     field $divider_class  = '';
     field $prompt_class   = '';
+    field $canvas_class   = '';
+    field $dpi            : param = undef;    # explicit DPI override (tests use dpi => 144); undef = detect
 
     # Per-surface registries for the shared-pump multi-window skeleton. Each surface (top-level HWND
     # family) owns a records map so WM_ACTIVATE / WM_CLOSE / tooltips route by surface. Today the only
@@ -143,13 +163,23 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     affix 'user32',   'GetMessageW',      [ Pointer [Void], Pointer [Void], UInt, UInt ] => Int;
     affix 'user32',   'IsDialogMessageW', [ Pointer [Void], Pointer [Void] ]             => Int;
     affix 'user32',   'GetFocus',         []                                             => Pointer [Void];
+    affix 'user32',   'GetKeyState',      [Int]                                          => Short;
     affix 'user32',   'GetWindowWord',    [ Pointer [Void], Int ]                        => UShort;
+
+    # Dark mode: set/query the immersive-dark attribute on a top-level HWND
+    # (DWMWA_USE_IMMERSIVE_DARK_MODE = 20; the value is a BOOL in a 4-byte buffer).
+    affix 'dwmapi', 'DwmSetWindowAttribute', [ Pointer [Void], UInt, Pointer [Void], UInt ] => Int;
+    affix 'dwmapi', 'DwmGetWindowAttribute', [ Pointer [Void], UInt, Pointer [Void], UInt ] => Int;
+
+    # Windows colour-scheme probe: HKCU\...\Themes\Personalize -> AppsUseLightTheme (REG_DWORD).
+    affix 'advapi32', 'RegOpenKeyExW',    [ Size_t, WString, ULong, ULong, Pointer [Void] ]                => Long;
+    affix 'advapi32', 'RegQueryValueExW', [ Size_t, WString, Pointer [Void], Pointer [Void], Pointer [Void], Pointer [Void] ] => Long;
+    affix 'advapi32', 'RegCloseKey',      [ Size_t ]                                                       => Long;
+    typedef DWORDV => Struct [ v => ULong ];    # one-DWORD scratch area (BOOL / DWORD out-value)
 
     # Colour / font support
     affix 'gdi32', 'SetTextColor',        [ Pointer [Void], ULong ] => ULong;
     affix 'gdi32', 'SetBkColor',          [ Pointer [Void], ULong ] => ULong;
-    affix 'gdi32', 'CreateSolidBrush',    [ULong]                   => Pointer [Void];
-    affix 'gdi32', 'DeleteObject',        [ Pointer [Void] ]        => Int;
     affix 'gdi32', 'CreateFontIndirectW', [ Pointer [Void] ]        => Pointer [Void];
     typedef LOGFONTW => Struct [
         lfHeight         => Int,
@@ -201,11 +231,78 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     affix 'gdi32',  'GetStockObject',        [Int]                                            => Pointer [Void];
     affix 'gdi32',  'SelectObject',          [ Pointer [Void], Pointer [Void] ]               => Pointer [Void];
     affix 'gdi32',  'GetTextExtentPoint32W', [ Pointer [Void], WString, Int, Pointer [Void] ] => Int;
+    affix 'gdi32',  'GetDeviceCaps',        [ Pointer [Void], Int ]                          => Int;    # LOGPIXELSX = 88
     typedef SIZE => Struct [ cx => Int, cy => Int ];
+
+    # Canvas widget paint: BeginPaint/EndPaint (PAINTSTRUCT), and the back-buffer blit.
+    typedef PAINTSTRUCT => Struct [
+        hdc         => Pointer [Void],
+        fErase      => Int,
+        rcPaint     => RECT(),
+        fRestore    => Int,
+        fIncUpdate  => Int,
+        rgbReserved => Array [ UChar, 32 ]
+    ];
+    affix 'user32', 'BeginPaint',         [ Pointer [Void], Pointer [Void] ]                                  => Pointer [Void];
+    affix 'user32', 'EndPaint',           [ Pointer [Void], Pointer [Void] ]                                  => Int;
+    affix 'gdi32',  'CreateCompatibleDC', [ Pointer [Void] ]                                                 => Pointer [Void];
+    affix 'gdi32',  'DeleteDC',           [ Pointer [Void] ]                                                 => Int;
+    affix 'gdi32',  'BitBlt',             [ Pointer [Void], Int, Int, Int, Int, Pointer [Void], Int, Int, ULong ] => Int;
+
+    # Colour-button owner draw: WM_DRAWITEM delivers a DRAWITEMSTRUCT to the OWNER window; the
+    # button control itself is mounted with BS_OWNERDRAW and we paint swatch + hex text there.
+    # Offsets: ct/CtlType..CtlID (5 uints), pad->4-byte-ptr alignment, hwndItem, hDC, rcItem,
+    # itemData (control id). 64 bytes total.
+    typedef DRAWITEMSTRUCT => Struct [
+        ctlType   => UInt,
+        ctlID     => UInt,
+        itemID    => UInt,
+        itemAction => UInt,
+        itemState => UInt,
+        hwndItem  => Pointer [Void],
+        hDC       => Pointer [Void],
+        rcItem    => RECT(),
+        itemData  => SSize_t
+    ];
+    affix 'gdi32',  'FillRect',        [ Pointer [Void], Pointer [Void], Pointer [Void] ] => Int;
+    affix 'gdi32',  'FrameRect',       [ Pointer [Void], Pointer [Void], Pointer [Void] ] => Int;
+    affix 'gdi32',  'CreateSolidBrush', [ Size_t ]                                         => Pointer [Void];
+    affix 'gdi32',  'DeleteObject',    [ Pointer [Void] ]                                  => Int;
+    affix 'gdi32',  'SetBkMode',       [ Pointer [Void], Int ]                             => Int;
+    affix 'user32', 'DrawTextW',       [ Pointer [Void], WString, Int, Pointer [Void], UInt ] => Int;
+    affix 'user32', 'DrawFocusRect',   [ Pointer [Void], Pointer [Void] ]                  => Int;
 
     # Common controls (trackbar/slider, up/down spinner, progress bar, etc.)
     typedef INITCOMMONCONTROLSEX => Struct [ dwSize => ULong, dwICC => ULong ];
     affix 'comctl32', 'InitCommonControlsEx', [ Pointer [ INITCOMMONCONTROLSEX() ] ] => Int;
+
+    # Toolbar icon image lists (comctl32.dll flat exports). ILC_COLOR32 = 0x20.
+    affix 'comctl32', 'ImageList_Create',       [ Int, Int, UInt, Int, Int ]          => Pointer [Void];
+    affix 'comctl32', 'ImageList_AddIcon',      [ Pointer [Void], Pointer [Void] ]    => Int;
+    affix 'comctl32', 'ImageList_GetImageCount', [ Pointer [Void] ]                   => Int;
+    affix 'comctl32', 'ImageList_Destroy',      [ Pointer [Void] ]                    => Int;
+    affix 'user32',   'DestroyIcon',            [ Pointer [Void] ]                    => Int;
+
+    # GDI+ flat API (gdiplus.dll) -- decodes PNG/JPG/ICO/GIF/BMP into HICONs for the toolbar
+    # image list (future: the Image widget + menu glyphs reuse _icon_hicon).
+    affix 'gdiplus', 'GdiplusStartup',           [ Pointer [Void], Pointer [Void], Pointer [Void] ] => Int;
+    affix 'gdiplus', 'GdipLoadImageFromFile',    [ Pointer [Void], Pointer [Void] ]                   => Int;
+    affix 'gdiplus', 'GdipGetImageWidth',        [ Pointer [Void], Pointer [Void] ]                   => Int;
+    affix 'gdiplus', 'GdipGetImageHeight',       [ Pointer [Void], Pointer [Void] ]                   => Int;
+    affix 'gdiplus', 'GdipCreateBitmapFromScan0', [ Int, Int, Int, Int, Pointer [Void], Pointer [Void] ] => Int;
+    affix 'gdiplus', 'GdipGetImageGraphicsContext', [ Pointer [Void], Pointer [Void] ]                 => Int;
+    affix 'gdiplus', 'GdipDrawImageRectRectI',
+        [ Pointer [Void], Pointer [Void], Int, Int, Int, Int, Int, Int, Int, Int, Int, Pointer [Void], Pointer [Void], Pointer [Void] ]
+        => Int;
+    affix 'gdiplus', 'GdipCreateHICONFromBitmap', [ Pointer [Void], Pointer [Void] ]                  => Int;
+    affix 'gdiplus', 'GdipCreateHBITMAPFromBitmap', [ Pointer [Void], Pointer [Void], Size_t ]          => Int;
+    affix 'gdiplus', 'GdipSetInterpolationMode',  [ Pointer [Void], Int ]                                => Int;
+    affix 'gdiplus', 'GdipDisposeImage',          [ Pointer [Void] ]                                  => Int;
+    affix 'gdiplus', 'GdipDeleteGraphics',        [ Pointer [Void] ]                                  => Int;
+    affix 'gdiplus', 'GdipCreatePen1',            [ Size_t, Float, Int, Pointer [Void] ]             => Int;
+    affix 'gdiplus', 'GdipDeletePen',             [ Pointer [Void] ]                                  => Int;
+    affix 'gdiplus', 'GdipSetSmoothingMode',      [ Pointer [Void], Int ]                             => Int;
+    affix 'gdiplus', 'GdipDrawLineI',             [ Pointer [Void], Pointer [Void], Int, Int, Int, Int ]   => Int;
 
     # Window enumeration / introspection (used by probes and tests)
     affix 'user32', 'FindWindowW',              [ WString, WString ]                    => Pointer [Void];
@@ -220,14 +317,15 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     my $icc_s = cast( $icc, INITCOMMONCONTROLSEX() );
     $icc_s->{dwSize} = sizeof( INITCOMMONCONTROLSEX() );
 
-    # ICC_UPDOWN_CLASS (0x1) | ICC_TREEVIEW_CLASSES (0x2) | ICC_BAR_CLASSES (0x4) | ICC_PROGRESS_CLASS (0x20)
-    $icc_s->{dwICC} = 0x00000027;
+    # ICC_DATE_CLASSES (0x100) | ICC_UPDOWN_CLASS (0x1) | ICC_TREEVIEW_CLASSES (0x2) | ICC_BAR_CLASSES (0x4) | ICC_PROGRESS_CLASS (0x20)
+    $icc_s->{dwICC} = 0x00000127;
     InitCommonControlsEx($icc);
     free($icc);
     ADJUST {
     }
 
     method init ($app_channel) {
+        $self->_enable_dpi_awareness;
         $channel = $app_channel;
         my $self_ref = $self;
         $wndproc_cb = sub ( $hwnd, $msg, $wparam, $lparam ) {
@@ -249,9 +347,25 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                     $self_ref->channel->put( { type => 'QUIT' } );
                 }
             }
+            elsif ( $msg == 0x0010 ) {    # WM_CLOSE -> the app may veto; otherwise the default destroy runs
+                if ( my $cb = $self_ref->_get_close_request_handler ) {
+                    return $cb->( $self_ref->surface_by_hwnd->{$hwnd} )
+                        ? DefWindowProcW( $hwnd, $msg, $wparam, $lparam )
+                        : 0;
+                }
+                return DefWindowProcW( $hwnd, $msg, $wparam, $lparam );
+            }
+            elsif ( $msg == 0x0100 ) {    # WM_KEYDOWN -> keyboard chords for sub_on_key subscriptions
+                my $chord = $self_ref->_build_chord( $hwnd, $msg, $wparam, $lparam );
+                if ( defined $chord ) {
+                    my $surface_id = $self_ref->surface_by_hwnd->{$hwnd};
+                    $self_ref->channel->put( { type => 'KEY_CHORD', chord => $chord, surface => $surface_id } );
+                }
+                return DefWindowProcW( $hwnd, $msg, $wparam, $lparam );
+            }
             elsif ( $msg == 0x0005 ) {    # WM_SIZE -> window was resized; re-layout
-                my $cw = $lparam & 0xFFFF;
-                my $ch = ( $lparam >> 16 ) & 0xFFFF;
+                my $cw = $self_ref->_ux( $lparam & 0xFFFF );
+                my $ch = $self_ref->_uy( ( $lparam >> 16 ) & 0xFFFF );
                 $self_ref->channel->put( { type => 'RESIZE' } );
                 my $cb = $self_ref->_get_resize_handler;
                 if ($cb) {
@@ -440,12 +554,63 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $cp->{hCursor}       = LoadCursorW( undef, 32512 );
         RegisterClassExW($pclass);
         free($pclass);
+
+        # Canvas surface: a raw 2D drawing box driven by the node's on_draw callback.
+        # The paint is fully owned by the driver: WM_PAINT renders the callback into a
+        # GDI+ back-buffer and blits it; WM_ERASEBKGND is swallowed so the double-buffer
+        # is the only thing drawn (no flicker, no background flash).
+        my $canvas_proc = sub ( $hwnd, $msg, $wparam, $lparam ) {
+            if ( $msg == 0x000F ) {    # WM_PAINT
+                $self_ref->_paint_canvas($hwnd);
+                return 0;
+            }
+            if ( $msg == 0x0014 ) {    # WM_ERASEBKGND -> the back-buffer paints everything
+                return 1;
+            }
+            return DefWindowProcW( $hwnd, $msg, $wparam, $lparam );
+        };
+        my $cclass = malloc( sizeof( WNDCLASSEXW() ) );
+        my $cc     = cast( $cclass, WNDCLASSEXW() );
+        $cc->{cbSize}        = sizeof( WNDCLASSEXW() );
+        $cc->{style}         = 0x0003;    # CS_HREDRAW | CS_VREDRAW: repaint on resize
+        $cc->{lpfnWndProc}   = $canvas_proc;
+        $cc->{hInstance}     = undef;
+        $cc->{hCursor}       = LoadCursorW( undef, 32512 );
+        $cc->{hbrBackground} = cast( 15 + 1, Pointer [Void] );    # COLOR_BTNFACE + 1
+        $cc->{lpszClassName} = $canvas_class = 'UjiCanvasClass' . ++$class_seq;
+        RegisterClassExW($cclass);
+        free($cclass);
     }
 
     # Shared routing for control-level messages, used by both the app-window wndproc and the
     # scroll-view viewport wndproc. Returns (1, $result) when the message was consumed (caller
     # must return $result) or (0, undef) when the caller should pass it to DefWindowProcW.
     method _ctrl_msg ( $hwnd, $msg, $wparam, $lparam ) {
+        if ( $msg == 0x0113 ) {    # WM_TIMER -> advance a spinner's frame
+            my $record = $self->_get_registry_record($wparam);
+            if ( $record && $record->{node} && $record->{node}->type eq 'spinner' ) {
+                my $frames = $record->{spin_frames};
+
+                # Consume the tick either way (a stale queued timer for a stopped spinner must not
+                # fall through to DefWindowProc), but only animate while the timer is ARMED (a
+                # set_prop('running', 0) / KillTimer must freeze it immediately).
+                if ( ref $frames eq 'ARRAY' && @$frames && $record->{spin_armed} ) {
+                    $record->{spin_idx} = ( ( $record->{spin_idx} // 0 ) + 1 ) % @$frames;
+                    SendMessageW( $record->{hwnd}, 0x0170, $frames->[ $record->{spin_idx} ], 0 );    # STM_SETICON
+                }
+                return ( 1, 0 );
+            }
+        }
+        if ( $msg == 0x002B ) {    # WM_DRAWITEM -> owner-drawn control (color button) needs a repaint
+            my $dis = cast( $lparam, DRAWITEMSTRUCT() );
+            if ($dis) {
+                my $record = $self->_get_registry_by_hwnd( $dis->{hwndItem} );
+                if ( $record && $record->{node} && $record->{node}->type eq 'color_button' ) {
+                    $self->_draw_color_button( $record->{node}, $dis, $record );
+                    return ( 1, 1 );
+                }
+            }
+        }
         if ( $msg == 0x0111 ) {    # WM_COMMAND
             my $control_id  = $wparam & 0xFFFF;
             my $notify_code = ( $wparam >> 16 ) & 0xFFFF;
@@ -488,6 +653,42 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             my $record = $self->_get_registry_record($control_id);
             if ($record) {
                 my $node = $record->{node};
+
+                # BN_CLICKED (0) -> Search field's ✕ clear button: empty the edit, hide the
+                # button, refocus the field, and fire on_search('') for the model to re-render.
+                if ( $notify_code == 0 && $record->{search_clear} ) {
+                    my $srec = $registry->{ $record->{search_id} };
+                    if ($srec) {
+                        my $snode = $srec->{node};
+                        $suppress_events = 1;
+                        SetWindowTextW( $srec->{hwnd}, '' );
+                        $suppress_events = 0;
+                        ShowWindow( $srec->{aux}, 0 );
+                        SetFocus( $srec->{hwnd} );
+                        if ( $snode && $snode->can('on_search') && $snode->on_search ) {
+                            my $action = $snode->on_search->('');
+                            $self->channel->put($action) if $action;
+                        }
+                    }
+                    return ( 1, 0 );
+                }
+
+                # BN_CLICKED (0) -> Colour button click: open the picker seeded with the current
+                # swatch colour; if the user picks one, forward the new colour to on_change. The
+                # picker is a blocking modal dialog (it runs its own pump), consistent with the
+                # standalone color_picker API. The lookup happens here so a monkeypatched
+                # color_picker is what tests see.
+                if ( $notify_code == 0 && $node->type eq 'color_button' ) {
+                    my $picked = $self->color_picker(
+                        initial => defined $record->{hex} ? $record->{hex} : ( $node->color // '#000000' ),
+                        owner   => $hwnd
+                    );
+                    if ( defined $picked && $node->can('on_change') && $node->on_change ) {
+                        $record->{hex}        = $picked;
+                        $self->channel->put( $node->on_change->($picked) );
+                    }
+                    return ( 1, 0 );
+                }
 
                 # BN_CLICKED (0) -> Button click. on_click is dispatched: a static message
                 # hashref is put verbatim; a callback is invoked and its return value is put.
@@ -649,18 +850,20 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 return ( 1, 0 );
             }
 
-            # DTN_DATETIMECHANGE (-760): the user changed the date/time in a SysDateTimePick32.
+            # DTN_DATETIMECHANGE (-759): the user changed the date/time in a SysDateTimePick32.
             # NMDATETIMECHANGE is NMHDR(24 on this x64 NMHDR) + dwFlags(4) + SYSTEMTIME st(16)
             # = 44 bytes total; the freshly edited date lands at st's raw offsets 28 (wYear),
             # 30 (wMonth) and 34 (wDay). Complete it to an ISO-8601 date and push it through
             # on_change exactly like the slider/spin value protocol. (dwFlags tells GDT_VALID vs
             # GDT_NONE; a cleared checkbox -> the empty string is reported as-is so the app can
-            # react to a "no date" choice.)
-            if ( $node->type eq 'date_picker' && $nm->{code} == -760 ) {
-                my $raw = Affix::raw( $lparam, 44 );
+            # react to a "no date" choice.) Note the value: it is DTN_FIRST2-6 where DTN_FIRST2
+            # is -753, i.e. -759 -- NOT DTN_FIRST (-760).
+            if ( $node->type eq 'date_picker' && $nm->{code} == -759 ) {
+                my $raw   = Affix::raw( $lparam, 44 );
+                my $flags = unpack( 'L<', substr( $raw, 24, 4 ) );
                 my ( $y, $m, undef, $d ) = unpack( 'v4', substr( $raw, 28, 8 ) );
-                my $iso    = $d                                          ? sprintf( '%04d-%02d-%02d', $y, $m, $d ) : '';
-                my $action = $node->can('on_change') && $node->on_change ? $node->on_change->($iso)                : undef;
+                my $iso    = ( $flags == 1 || !$d ) ? '' : sprintf( '%04d-%02d-%02d', $y, $m, $d );    # GDT_NONE(1) -> no date
+                my $action = $node->can('on_change') && $node->on_change ? $node->on_change->($iso)   : undef;
                 $self->channel->put($action) if $action;
                 return ( 1, 0 );
             }
@@ -821,7 +1024,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
 
     # Lazily create and cache an HFONT for a given face name and point size. Uses the same
     # LOGFONTW struct as CreateFontIndirectW. Height is calculated as -MulDiv(pointsize, dpi, 72).
-    # We use a default DPI of 96; a proper DPI-aware version would call GetDeviceCaps.
+    # Height is scaled by the true device DPI (GetDeviceCaps LOGPIXELSX) so text matches the
+    # physical pixel size of a point on the current monitor; a no-op at 96 DPI.
     method _get_font ( $name, $size ) {
         $name //= 'Segoe UI';
         $size //= 9;
@@ -829,7 +1033,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         return $font_cache->{$key} if $font_cache->{$key};
         my $lf_ptr = malloc( sizeof( LOGFONTW() ) );
         my $lf     = cast( $lf_ptr, LOGFONTW() );
-        my $height = -int( $size * 96 / 72 );                                       # negative = character height
+        my $height = -int( $size * $self->_dpi / 72 );                              # negative = character height
         $lf->{lfHeight}         = $height;
         $lf->{lfWeight}         = 400;                                              # FW_NORMAL
         $lf->{lfCharSet}        = 1;                                                # DEFAULT_CHARSET
@@ -847,14 +1051,93 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         return $hfont;
     }
 
+    # COLORREF for GDI brushes: 0x00BBGGRR (the GDI+ ARGB helper in Uji::Draw swaps to 0xAARRGGBB).
+    method _gdi_colorref ($hex) {
+        $hex //= '#000000';
+        return 0 unless $hex =~ /#?([0-9a-fA-F]{6})/;
+        my $r = hex( substr( $1, 0, 2 ) );
+        my $g = hex( substr( $1, 2, 2 ) );
+        my $b = hex( substr( $1, 4, 2 ) );
+        return ( $b << 16 ) | ( $g << 8 ) | $r;
+    }
+
+    # Paint an owner-drawn colour button: swatch square, optional hex text, border and
+    # pressed/focus/disabled states, in the DRAWITEMSTRUCT's device context.
+    method _draw_color_button ( $node, $di, $record ) {
+        my $hdc = $di->{hDC} or return;
+        my $hex = defined $record->{hex} ? $record->{hex} : ( $node->color // '#000000' );
+        $record->{hex} = $hex;
+
+        my $r        = $di->{rcItem};                 # arrayref from the Affix struct field access
+        my $sel      = ( $di->{itemState} & 0x0001 ) ? 1 : 0;    # ODS_SELECTED
+        my $disabled = ( $di->{itemState} & 0x0004 ) ? 1 : 0;    # ODS_DISABLED
+        my $focus    = ( $di->{itemState} & 0x0010 ) ? 1 : 0;    # ODS_FOCUS
+
+        # Swatch square on the left, inset so the border and focus ring show on all sides.
+        my $sw = 16;
+        my $sh = $r->{bottom} - $r->{top} - ( $sel ? 2 : 0 );
+        $sh = 16 if $sh > 16;
+        $sh = 4  if $sh < 4;
+        my $sx = $r->{left} + 3 + $sel;
+        my $sy = $r->{top} + ( ( $r->{bottom} - $r->{top} - $sh ) / 2 ) + $sel;
+
+        my $brush = CreateSolidBrush( $disabled ? $self->_gdi_colorref('#B8B8B8') : $self->_gdi_colorref($hex) );
+        my $rp1 = malloc( sizeof( RECT() ) );
+        my $r1  = cast( $rp1, RECT() );
+        ( $r1->{left}, $r1->{top}, $r1->{right}, $r1->{bottom} ) = ( $sx, $sy, $sx + $sw, $sy + $sh );
+        FillRect( $hdc, $rp1, $brush );
+        DeleteObject($brush);
+
+        # Thin border around the swatch (only when not disabled: the disabled face is flat).
+        unless ($disabled) {
+            my $rp2 = malloc( sizeof( RECT() ) );
+            my $r2  = cast( $rp2, RECT() );
+            ( $r2->{left}, $r2->{top}, $r2->{right}, $r2->{bottom} ) = ( $sx, $sy, $sx + $sw, $sy + $sh );
+            FrameRect( $hdc, $rp2, GetStockObject(4) );    # BLACK_BRUSH
+            free($rp2);
+        }
+
+        # Hex label to the right of the swatch.
+        if ( $node->show_hex ) {
+            my $hfont = $self->_get_font( $node->font, $node->font_size );
+            my $old   = SelectObject( $hdc, $hfont );
+            SetBkMode( $hdc, 1 );    # TRANSPARENT
+            SetTextColor( $hdc, $disabled ? 0x00808080 : 0x00000000 );
+            my $tx = $sx + $sw + 6 + $sel;
+            my $tp = malloc( sizeof( RECT() ) );
+            my $tr = cast( $tp, RECT() );
+            ( $tr->{left}, $tr->{top}, $tr->{right}, $tr->{bottom} ) = ( $tx, $r->{top} + $sel, $r->{right} - 3, $r->{bottom} + $sel );
+            DrawTextW( $hdc, $self->_nz($hex), -1, $tp, 0x0824 );    # DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX
+            free($tp);
+            SelectObject( $hdc, $old ) if $old;
+        }
+
+        free($rp1);
+        if ($focus) {
+            my $fp = malloc( sizeof( RECT() ) );
+            my $fr = cast( $fp, RECT() );
+            ( $fr->{left}, $fr->{top}, $fr->{right}, $fr->{bottom} ) = ( $r->{left}, $r->{top}, $r->{right}, $r->{bottom} );
+            DrawFocusRect( $hdc, $fp );
+            free($fp);
+        }
+    }
+
     # Destroy the native control (and any auxiliary controls like a spin buddy) and remount the
     # node from scratch. Used when a mount-time-only prop (multiline, orientation, align) changes.
     method recreate_node ( $old_id, $new_node ) {
         my $old    = $registry->{$old_id} or return;
         my $parent = $old->{parent_hwnd} // $main_hwnd;
 
+        # Drop the search-clear command routing (its BN_CLICKED control id is 0x4000+-range).
+        if ( my $cmd = $old->{search_clear_id} ) {
+            delete $registry->{$cmd};
+        }
+
         # Destroy the auxiliary control first (e.g. spin buddy).
         DestroyWindow( $old->{aux} ) if $old->{aux};
+
+        # Destroy a search input's leading icon glyph (a sibling STATIC).
+        DestroyWindow( $old->{icon_hwnd} ) if $old->{icon_hwnd};
 
         # Destroy the primary HWND.
         DestroyWindow( $old->{hwnd} ) if $old->{hwnd};
@@ -889,6 +1172,27 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         return @kids;
     }
 
+    # Overlay: enforce "later layers on top". Win32 creation order puts the FIRST sibling on
+    # top; raising each layer in array order with HWND_TOP leaves the LAST layer frontmost.
+    method _apply_overlay ($node) {
+        return unless $node && $node->can('children');
+        $self->_raise_layer($_) for @{ $node->children };
+    }
+
+    # Raise one overlay LAYER to the top of the sibling stack: the layer's own control when it
+    # owns one, otherwise every control under it (a container layer such as a column or an inner
+    # overlay has no HWND, so each of its sub-controls is raised; the LAST raise within the layer
+    # wins, which is the layer's final z).
+    method _raise_layer ($node) {
+        return unless $node;
+        my $r = $self->_get_registry_record( $node->id );
+        if ( $r && $r->{hwnd} ) {
+            SetWindowPos( $r->{hwnd}, cast( 0, Pointer [Void] ), 0, 0, 0, 0, 0x0013 );    # HWND_TOP, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+            return;
+        }
+        $self->_raise_layer($_) for @{ $node->children // [] };
+    }
+
     # Class name of a window (wide buffer).
     method _get_class ($hwnd) {
         my $buf = malloc( 256 * sizeof(WChar) );
@@ -921,7 +1225,9 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $packed = SendMessageW( $hwnd, 0x0140, 0, 0 );    # CB_GETEDITSEL
         return ( ( $packed & 0xFFFF ), ( $packed >> 16 ) & 0xFFFF );
     }
-    method _get_registry_record ($id) { $registry->{$id} }
+    method _get_registry_record ($id) {
+        return $registry->{$id} // $registry->{ $cid_to_id->{$id} // '' };
+    }
 
     method _get_registry_by_hwnd ($hwnd) {
         for my $id ( keys %$registry ) {
@@ -966,7 +1272,12 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
 
         # WS_OVERLAPPEDWINDOW (0x10CF0000); drop WS_THICKFRAME (0x00040000) when not resizable
         my $style = $vtree->resizable ? 0x10CF0000 : 0x10CB0000;
-        my $hwnd  = CreateWindowExW( 0, $win_class, $self->_nz( $vtree->title ), $style, 100, 100, $vtree->w, $vtree->h, undef, 0, undef, undef );
+        my $hwnd  = CreateWindowExW(
+            0, $win_class, $self->_nz( $vtree->title ), $style,
+            $self->_sx(100), $self->_sy(100), $self->_sx( $vtree->w ), $self->_sy( $vtree->h ),
+            undef, 0, undef, undef
+        );
+        $self->_frame_dark($hwnd) if $self->uses_dark_mode;
         $registry->{ $vtree->id } = { hwnd => $hwnd, node => $vtree, surface => $surface_id };
         $surfaces->{$surface_id}  = { hwnd => $hwnd, node => $vtree, records => {} };
         $surface_by_hwnd->{$hwnd} = $surface_id;
@@ -1025,6 +1336,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     # Convert a client-area size into the outer window-rect size (frame + borders), so that
     # min/max track sizes in WM_GETMINMAXINFO can be expressed in window coordinates.
     method _frame_size_for_client ( $cw, $ch ) {
+        ( $cw, $ch ) = ( $self->_sx($cw), $self->_sy($ch) );    # track clamps are logical sizes
         my $rect_ptr = malloc( sizeof( RECT() ) );
         my $rect     = cast( $rect_ptr, RECT() );
         $rect->{left}   = 0;
@@ -1044,6 +1356,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     }
 
     method _set_window_outer ( $hwnd, $cw, $ch, $mode = 'none' ) {
+        ( $cw, $ch ) = ( $self->_sx($cw), $self->_sy($ch) );    # $cw/$ch are logical client dimensions
         my $rect_ptr = malloc( sizeof( RECT() ) );
         my $rect     = cast( $rect_ptr, RECT() );
         $rect->{left}   = $rect->{top} = 0;
@@ -1122,7 +1435,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $rect = malloc( sizeof( RECT() ) );
         my $r    = cast( $rect, RECT() );
         GetClientRect( $hwnd, $rect );
-        my ( $w, $h ) = ( $r->{right} - $r->{left}, $r->{bottom} - $r->{top} );
+        my ( $w, $h ) = ( $self->_ux( $r->{right} - $r->{left} ), $self->_uy( $r->{bottom} - $r->{top} ) );
         free($rect);
         return ( $w, $h );
     }
@@ -1138,7 +1451,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $sz  = cast( $buf, SIZE() );
         $text = $self->_nz( $text // '' );
         GetTextExtentPoint32W( $dc, $text, length $text, $buf );
-        my ( $w, $h ) = ( $sz->{cx}, $sz->{cy} );
+        my ( $w, $h ) = ( $self->_ux( $sz->{cx} ), $self->_uy( $sz->{cy} ) );
         free($buf);
         ReleaseDC( $font_hwnd, $dc );
         return ( $w, $h );
@@ -1171,6 +1484,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         free($msg_ptr);
         $self->_repaint_active_spin_arrows;
         $self->_sync_column_orders;
+        $self->_track_focus;
     }
 
     method _mount_node ( $vnode, $parent_hwnd ) {
@@ -1179,6 +1493,14 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $class        = 'BUTTON';
             $style        = 0x54000000;            # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON
             $initial_text = $vnode->label // '';
+        }
+        elsif ( $vnode->type eq 'color_button' ) {
+            $class        = 'BUTTON';
+
+            # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP | BS_OWNERDRAW: the control
+            # still tracks focus and sends BN_CLICKED; WM_DRAWITEM goes to the parent window.
+            $style = 0x5401000B;
+            $initial_text = '';
         }
         elsif ( $vnode->type eq 'text' || $vnode->type eq 'status_text' ) {
             $class = 'STATIC';
@@ -1211,6 +1533,15 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $style        = 0x548000A0;
             $initial_text = $self->_to_crlf( $vnode->value // '' );
         }
+        elsif ( $vnode->type eq 'search_input' ) {
+            $class = 'EDIT';
+
+            # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_BORDER | ES_AUTOHSCROLL (single-line).
+            # The leading icon and trailing clear button are SIBLING aux controls (below); the
+            # edit's EM_SETMARGINS reserve those strips so text/caret never run under them.
+            $style        = 0x54800080;
+            $initial_text = $self->_to_crlf( $vnode->value // '' );
+        }
         elsif ( $vnode->type eq 'slider' ) {
             $class = 'msctls_trackbar32';
 
@@ -1220,10 +1551,12 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         elsif ( $vnode->type eq 'date_picker' ) {
             $class = 'SysDateTimePick32';
 
-            # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS (0x54000000) | DTS_SHOWNONE (0x2: the edit has a
-            # checkbox that clears the date) | DTS_SHORTDATEFORMAT (0x0) or DTS_LONGDATEFORMAT (0x4).
-            $style = 0x54000004;
-            if ( $vnode->format eq 'short' ) { $style = 0x54000000; }
+            # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS (0x54000000) | DTS_SHORTDATEFORMAT (0x0),
+            # DTS_LONGDATEFORMAT (0x4) or DTS_TIMEFORMAT (0x9), plus DTS_SHOWNONE (0x2: an edit-time
+            # checkbox that clears the date) and DTS_UPDOWN (0x1: up/down arrows instead of a dropdown).
+            $style = 0x54000000;                      # 'short' (default)
+            $style = 0x54000004 if $vnode->format eq 'long';    # DTS_LONGDATEFORMAT
+            $style = 0x54000009 if $vnode->format eq 'time';    # DTS_TIMEFORMAT
             $style |= 0x54000002 if $self->_nz( $vnode->show_none );
             $style |= 0x54000001 if $self->_nz( $vnode->useynavigate );
         }
@@ -1381,6 +1714,46 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 = { hwnd => undef, node => $vnode, parent_hwnd => $parent_hwnd, surface => 'main', orientation => $vnode->orientation, };
             return;
         }
+        elsif ( $vnode->type eq 'spinner' ) {
+            $class = 'STATIC';
+
+            # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS (0x54000000)
+            # | SS_CENTERIMAGE (0x0200) | SS_ICON (0x03): a frameless host that draws the
+            # current frame; the frame advances on a WM_TIMER (see _ctrl_msg).
+            $style = 0x54000203;
+        }
+        elsif ( $vnode->type eq 'image' ) {
+            $class = 'STATIC';
+
+            # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS (0x54000000)
+            # | SS_BITMAP (0xE): a picture holder. The driver rasterizes the source to the
+            # widget's EXACT box (respecting object_fit) and hands it over via WM_SETIMAGE.
+            $style = 0x5400000E;
+        }
+        elsif ( $vnode->type eq 'canvas' ) {
+            $class = $canvas_class;
+
+            # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS (0x54000000): a frameless box painted
+            # entirely by the node's on_draw callback (see _paint_canvas).
+            $style = 0x54000000;
+        }
+        elsif ( $vnode->type eq 'separator' ) {
+            $class = 'STATIC';
+
+            # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS (0x54000000)
+            # | SS_ETCHEDHORZ (0x10) or SS_ETCHEDVERT (0x11): a 2px etched line, no text.
+            $style = 0x54000000 | ( $vnode->orientation eq 'vertical' ? 0x0011 : 0x0010 );
+        }
+        elsif ( $vnode->type eq 'overlay' ) {
+
+            # No native window of its own: the LAYERS mount as SIBLINGS of the app window like any
+            # other container's children. Win32 puts the FIRST-created sibling on top, but an
+            # overlay's array order is its draw order (later layers over earlier ones), so the
+            # stacking is re-established after mounting via _apply_overlay.
+            $self->_mount_node( $_, $parent_hwnd ) for @{ $vnode->children };
+            $self->_apply_overlay($vnode);
+            return;
+        }
         else {
             $self->_mount_node( $_, $parent_hwnd ) for @{ $vnode->children };
 
@@ -1389,9 +1762,15 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $registry->{ $vnode->id } = { hwnd => undef, node => $vnode, surface => 'main' } if $vnode->type eq 'radio_group';
             return;
         }
+        # The native control's ID routes WM_COMMAND/WM_NOTIFY back to its node (the wndproc decodes
+        # $wparam & 0xFFFF), so it must be numeric. Numeric node ids are used verbatim; string node
+        # ids (composed widgets such as a calendar's day cells) draw from a dedicated 0x6000+
+        # allocator and are registered in the reverse map `cid_to_id`.
+        my $cid = $vnode->id =~ /^\d+$/ ? 0 + $vnode->id : ++$cid_counter;
+        $cid_to_id->{$cid} = $vnode->id;
         my $hwnd = CreateWindowExW( 0, $class, $self->_nz($initial_text),
-            $style, $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef, undef );
-        $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode, parent_hwnd => $parent_hwnd, surface => 'main' };
+            $style, $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $cid, undef, undef );
+        $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode, parent_hwnd => $parent_hwnd, surface => 'main', cid => $cid };
         $surface_by_hwnd->{$hwnd} = 'main';    # reverse map: HWND -> surface_id (each control HWND belongs to the main surface today)
 
         # Apply initial state for props that aren't baked into styles.
@@ -1408,6 +1787,36 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             SendMessageW( $hwnd, 0x00C5, $vnode->maxlength, 0 ) if $vnode->maxlength;    # EM_LIMITTEXT
             SetFocus($hwnd) if $vnode->focused;
         }
+if ( $vnode->type eq 'spinner' ) {
+
+            # Pre-render the animation frames once (cached per size@color), show frame 0, and
+            # arm the per-spinner WM_TIMER (id = its control id). Frames swap in _ctrl_msg.
+            my $frames            = $self->_spinner_frames( $vnode->size // 24, $vnode->color );
+            $registry->{ $vnode->id }{spin_frames} = $frames;
+            $registry->{ $vnode->id }{spin_idx}    = 0;
+            SendMessageW( $hwnd, 0x0170, $frames->[0], 0 );    # STM_SETICON
+            $registry->{ $vnode->id }{spin_armed} = 0;
+            if ( $vnode->running && @$frames ) {
+                SetTimer( $parent_hwnd, $cid, $vnode->speed // 80, undef );
+                $registry->{ $vnode->id }{spin_armed} = 1;
+            }
+        }
+        if ( $vnode->type eq 'image' ) {
+            $registry->{ $vnode->id }{img_w} = $vnode->bw || 16;
+            $registry->{ $vnode->id }{img_h} = $vnode->bh || 16;
+            $registry->{ $vnode->id }{img_src} = $vnode->src;
+            $registry->{ $vnode->id }{img_fit} = $vnode->object_fit // 'contain';
+
+            # Raster the source into an HBITMAP at the current (pre-layout) box; move_widget
+            # re-rasters once the layout fixes the real w x h.
+            my $hb = $self->_raster_hbitmap( $vnode->src, $registry->{ $vnode->id }{img_w}, $registry->{ $vnode->id }{img_h}, $vnode->object_fit );
+            SendMessageW( $hwnd, 0x0172, 0, $hb ) if $hb;    # STM_SETIMAGE (IMAGE_BITMAP = 0)
+        }
+        if ( $vnode->type eq 'canvas' ) {
+            # A freshly created visible canvas starts with an invalid region, so the first
+            # WM_PAINT (via the app loop or an UpdateWindow in tests) renders on_draw.
+            InvalidateRect( $hwnd, undef, 0 );
+        }
         if ( $vnode->type eq 'slider' ) {
 
             # TBM_SETRANGE (0x0401): (max << 16) | min, wParam = redraw
@@ -1417,26 +1826,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             SendMessageW( $hwnd, 0x041D, 1, $vnode->step );                              # TBM_SETPAGESIZE
         }
         if ( $vnode->type eq 'date_picker' ) {
-            my $y = $vnode->year  // 0;
-            my $m = $vnode->month // 1;
-            my $d = $vnode->day   // 1;
-
-            # SYSTEMTIME = 8 x u16: year, month, dayOfWeek, day, hour, minute, second, ms (16 bytes LE).
-            my $st  = pack( 'S8', $y, $m, 0, $d, 0, 0, 0, 0 );
-            my $buf = malloc(16);
-            memcpy( $buf, $st, 16 );
-            SendMessageW( $hwnd, 0x1002, 0, Affix::address($buf) );                      # DTM_SETSYSTEMTIME wParam=GDT_VALID(0)
-            free($buf);
-
-            # DTM_SETRANGE (0x1004): wParam = GDTR_MIN|GDTR_MAX (0x3); lParam -> SYSTEMTIME min then max.
-            if ( ( defined $vnode->min_year || defined $vnode->min_month ) || ( defined $vnode->max_year || defined $vnode->max_month ) ) {
-                my $lo = pack( 'S8', $vnode->min_year // 1601, $vnode->min_month // 1,  0, $vnode->min_day // 1,  0, 0, 0, 0 );
-                my $hi = pack( 'S8', $vnode->max_year // 9999, $vnode->max_month // 12, 0, $vnode->max_day // 31, 0, 0, 0, 0 );
-                my $rb = malloc(32);
-                memcpy( $rb, $lo . $hi, 32 );
-                SendMessageW( $hwnd, 0x1004, 0x3, Affix::address($rb) );
-                free($rb);
-            }
+            $self->_set_date_value( $hwnd, $vnode->value );
+            $self->_set_date_range( $hwnd, $vnode->min, $vnode->max );
         }
         if ( $vnode->type eq 'checkbox' ) {
             SendMessageW( $hwnd, 0x00F1, $vnode->checked ? 1 : 0, 0 );    # BM_SETCHECK
@@ -1499,6 +1890,19 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         # copies the buffers, so they can be freed immediately).
         if ( $vnode->type eq 'status_bar' ) {
             $self->_populate_statusbar( $hwnd, $vnode );
+        }
+
+        # Search input: placeholder, edit margins that reserve the icon/clear strips, then the
+        # two sibling aux controls (leading icon glyph + trailing clear button).
+        if ( $vnode->type eq 'search_input' ) {
+            $self->_set_placeholder( $hwnd, $vnode->placeholder ) if defined $vnode->placeholder;
+
+            # EM_SETMARGINS (0x00D3): wParam = EC_LEFTMARGIN(1) | EC_RIGHTMARGIN(2) = 3;
+            # lParam = (right << 16) | left. Left strip opens room for the 16px icon at +4;
+            # right strip is the 20px clear-button zone.
+            my $left = $vnode->icon ? 24 : 4;
+            SendMessageW( $hwnd, 0x00D3, 3, ( 20 << 16 ) | $left );
+            $self->_mount_search_aux( $parent_hwnd, $vnode );
         }
 
         # Group box: content children are SIBLINGS of the app window (see the mount comment about
@@ -1576,6 +1980,44 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         # it deterministically right here so the arrows are visible from the moment it mounts.
         InvalidateRect( $up, undef, 0 );
         UpdateWindow($up);
+    }
+
+    # Search input auxiliaries: an optional leading icon glyph (STATIC + SS_ICON fed by the same
+    # GDI+ loader the toolbar uses) and a trailing "clear field" button (a flat ✕). The clear
+    # button is hidden while the field is empty and gets a fresh command id from the driver-wide
+    # allocator so its BN_CLICKED arrives at _ctrl_msg with an unambiguous control id; a registry
+    # record maps that id back to the search node (search_clear => 1, search_id => the edit's id).
+    method _mount_search_aux ( $parent_hwnd, $vnode ) {
+        my $rec = $registry->{ $vnode->id } or return;
+
+        if ( $vnode->icon ) {
+            my $hicon = $self->_icon_hicon( $vnode->icon, 16 );
+            if ($hicon) {
+                my $ih = CreateWindowExW(
+                    0, 'STATIC', undef,
+                    0x54000203,    # WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS | SS_CENTERIMAGE(0x0200) | SS_ICON(0x03)
+                    $vnode->bx + 4, $vnode->by + int( ( $vnode->bh - 16 ) / 2 ), 16, 16, $parent_hwnd, 0, undef, undef
+                );
+                if ($ih) {
+                    SendMessageW( $ih, 0x0170, $hicon, 0 );    # STM_SETICON
+                    $rec->{icon_hwnd} = $ih;
+                }
+            }
+        }
+
+        my $cmd   = ++$cmd_counter;
+        my $clear = CreateWindowExW(
+            0, 'BUTTON', "\x{2715}",
+
+            # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON | BS_FLAT (0x8000)
+            0x54008000, $vnode->bx + $vnode->bw - 20, $vnode->by, 20, $vnode->bh, $parent_hwnd, $cmd, undef, undef
+        );
+        return unless $clear;
+        EnableWindow( $clear, $vnode->enabled ? 1 : 0 );
+        ShowWindow( $clear, $vnode->value ? 5 : 0 );
+        $rec->{aux}             = $clear;
+        $rec->{search_clear_id} = $cmd;
+        $registry->{$cmd} = { hwnd => $clear, node => $vnode, search_clear => 1, search_id => $vnode->id, };
     }
 
     # The up-down's own hot-track / click repaints erase its arrow glyphs under the poll pump
@@ -1686,6 +2128,39 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         return -1;
     }
 
+    # DTM_SETSYSTEMTIME (0x1002): write an ISO date into a SysDateTimePick32.
+    # wParam = GDT_VALID (0) with lParam -> SYSTEMTIME for a date; wParam = GDT_NONE (1) clears the
+    # picker's date box (the same signal a SHOWNONE checkbox produces when the user un-checks it).
+    method _set_date_value ( $hwnd, $value ) {
+        return unless $hwnd;
+        if ( defined $value && $value =~ /^(\d{4})-(\d{2})-(\d{2})$/ ) {
+            # SYSTEMTIME = 8 x u16: year, month, dayOfWeek, day, hour, minute, second, ms (16 bytes LE).
+            my $st  = pack( 'S8', $1, $2, 0, $3, 0, 0, 0, 0 );
+            my $buf = malloc(16);
+            memcpy( $buf, $st, 16 );
+            SendMessageW( $hwnd, 0x1002, 0, Affix::address($buf) );    # wParam = GDT_VALID (0)
+            free($buf);
+        }
+        else {
+            SendMessageW( $hwnd, 0x1002, 1, 0 );                       # wParam = GDT_NONE (1)
+        }
+    }
+
+    # DTM_SETRANGE (0x1004): wParam = GDTR_MIN|GDTR_MAX (0x3); lParam -> SYSTEMTIME min then max.
+    # Bounds come from the node's ISO `min`/`max`; either may be undef (replaced by the 1601..9999
+    # defaults). No message is sent when both bounds are missing so the control keeps the native range.
+    method _set_date_range ( $hwnd, $min, $max ) {
+        return unless $hwnd;
+        return if !defined $min && !defined $max;
+        my $lo = $min && $min =~ /^(\d{4})-(\d{2})-(\d{2})$/ ? [ $1, $2, $3 ] : [ 1601, 1,  1  ];
+        my $hi = $max && $max =~ /^(\d{4})-(\d{2})-(\d{2})$/ ? [ $1, $2, $3 ] : [ 9999, 12, 31 ];
+        my $rb = malloc(32);
+        memcpy( $rb, pack('S8', $lo->[0], $lo->[1], 0, $lo->[2], 0, 0, 0, 0)
+                  . pack('S8', $hi->[0], $hi->[1], 0, $hi->[2], 0, 0, 0, 0), 32 );
+        SendMessageW( $hwnd, 0x1004, 0x3, Affix::address($rb) );
+        free($rb);
+    }
+
     method set_prop ( $vnode_id, $prop_name, $value ) {
         my $record = $registry->{$vnode_id};
         return unless $record;
@@ -1711,7 +2186,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             }
         }
         elsif ( $prop_name =~ /^(min|max)_[wh]$/ ) {                                 # window min/max -> re-clamp live
-            my $vn = $main_vnode || $record->{node};
+            my $vn = $record->{node} || $main_vnode;    # the target window's node, not the first-mounted one
             my ( $cw, $ch ) = $self->_get_client_size( $record->{hwnd} );
             my ( $nw, $nh ) = ( $cw, $ch );
             if ( $vn->min_w && $nw < $vn->min_w ) { $nw = $vn->min_w }
@@ -1769,20 +2244,56 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $self->_populate_tabs($vnode_id);
             $self->_apply_tab($vnode_id);
         }
+        elsif ( $prop_name =~ /^(running|speed|size|color)$/ && $record->{node}->type eq 'spinner' ) {
+
+            # Any spinner animation prop: swap the (cached) frame set, and re-arm the timer from
+            # the values BEING SET (which may be the reconciler path with the node already updated
+            # or a direct driver call where the node is still stale).
+            my $new_running = $prop_name eq 'running' ? $value : $record->{node}->running;
+            my $new_speed   = $prop_name eq 'speed'   ? $value : $record->{node}->speed;
+            my $new_size    = $prop_name eq 'size'    ? $value : $record->{node}->size;
+            my $new_color   = $prop_name eq 'color'   ? $value : $record->{node}->color;
+            $record->{spin_frames} = $self->_spinner_frames( $new_size, $new_color );
+            $record->{spin_idx}    = 0;
+            $record->{spin_armed}  = 0;
+            SendMessageW( $record->{hwnd}, 0x0170, $record->{spin_frames}[0], 0 );    # STM_SETICON
+            KillTimer( $record->{parent_hwnd}, $record->{cid} );
+            if ( $new_running && @{ $record->{spin_frames} } ) {
+                SetTimer( $record->{parent_hwnd}, $record->{cid}, $new_speed // 80, undef );
+                $record->{spin_armed} = 1;
+            }
+        }
+        elsif ( ( $prop_name eq 'src' || $prop_name eq 'object_fit' ) && $record->{node}->type eq 'image' ) {
+
+            # Swap the picture: re-raster at the current box from the value BEING SET (direct
+            # driver calls with a stale node) or the reconciled node.
+            my $src = $prop_name eq 'src'       ? $value : $record->{node}->src;
+            my $fit = $prop_name eq 'object_fit' ? $value : ( $record->{node}->object_fit // 'contain' );
+            my $w   = $record->{img_w} || 16;
+            my $h   = $record->{img_h} || 16;
+            $record->{img_src} = $src;
+            $record->{img_fit} = $fit;
+            my $hb = $self->_raster_hbitmap( $src, $w, $h, $fit );
+            SendMessageW( $record->{hwnd}, 0x0172, 0, $hb ) if $hb;    # STM_SETIMAGE (IMAGE_BITMAP = 0)
+        }
+        elsif ( $prop_name eq 'color' && $record->{node}->type eq 'color_button' ) {
+            # Swatch colour change: repaint the owner-drawn button in place. The hex label
+            # width shifts with the colour text, so let a full reflow handle sizing; the
+            # invalidated control repaints against the new record node.
+            InvalidateRect( $record->{hwnd}, undef, 1 );
+        }
+        elsif ( $prop_name eq 'show_hex' && $record->{node}->type eq 'color_button' ) {
+            # Show/hide the hex label: relayout + repaint.
+            InvalidateRect( $record->{hwnd}, undef, 1 );
+        }
+        elsif ( $record->{node}->type eq 'canvas' && ( $prop_name eq 'on_draw' || $prop_name eq 'redraw' ) ) {
+            # Canvas repaint: a changed on_draw callback or a bumped redraw invalidates the
+            # control; the next WM_PAINT reads the (already updated) node and re-draws.
+            InvalidateRect( $record->{hwnd}, undef, 0 );
+        }
         elsif ( $prop_name eq 'value' ) {
             if ( $record->{node}->type eq 'date_picker' ) {
-
-                # DTM_SETSYSTEMTIME (0x1002): wParam = GDT_VALID (0), lParam -> SYSTEMTIME.
-                # Write in the mount-init style: 8 x u16 = year, month, dayOfWeek(=0), day, hour,
-                # minute, second, ms (16 bytes LE). Empty/unparsable value clears the control the
-                # way the mount-time "no date" path does (year=0 -> the control shows nothing).
-                my ( $y, $m, $d ) = $value =~ /^(\d{4})-(\d{2})-(\d{2})$/ ? ( $1, $2, $3 ) : ( 0, 0, 0 );
-                my $st  = pack( 'S8', $y, $m, 0, $d, 0, 0, 0, 0 );
-                my $buf = malloc(16);
-                memcpy( $buf, $st, 16 );
-                SendMessageW( $record->{hwnd}, 0x1002, 0, Affix::address($buf) );
-                free($buf);
-                return;
+                $self->_set_date_value( $record->{hwnd}, $value );
             }
             if ( $record->{node}->type eq 'slider' ) {
                 SendMessageW( $record->{hwnd}, 0x0405, 1, $value );
@@ -1866,14 +2377,26 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 my $len = CORE::length $native;
                 SendMessageW( $record->{hwnd}, 0x00B1, $len, $len );
             }
+
+            # Search input: the clear button is shown only while the field holds text.
+            if ( $record->{node}->type eq 'search_input' && $record->{aux} ) {
+                ShowWindow( $record->{aux}, $value ? 5 : 0 );
+            }
         }
         elsif ( $prop_name eq 'enabled' ) {    # all widgets
             EnableWindow( $record->{hwnd}, $value ? 1 : 0 );
-            EnableWindow( $record->{aux},  $value ? 1 : 0 ) if $record->{node}->type eq 'spin_box';
+            if ( $record->{aux} ) {
+                EnableWindow( $record->{aux}, $value ? 1 : 0 ) if $record->{node}->type eq 'spin_box' || $record->{node}->type eq 'search_input';
+            }
+            EnableWindow( $record->{icon_hwnd}, $value ? 1 : 0 ) if $record->{icon_hwnd};
         }
         elsif ( $prop_name eq 'visible' ) {    # all widgets
             ShowWindow( $record->{hwnd}, $value ? 5 : 0 );
-            ShowWindow( $record->{aux},  $value ? 5 : 0 ) if $record->{node}->type eq 'spin_box';
+            if ( $record->{aux} ) {
+                ShowWindow( $record->{aux}, $value ? 5 : 0 ) if $record->{node}->type eq 'spin_box';
+                ShowWindow( $record->{aux}, ( $value && $record->{node}->value ) ? 5 : 0 ) if $record->{node}->type eq 'search_input';
+            }
+            ShowWindow( $record->{icon_hwnd}, $value ? 5 : 0 ) if $record->{icon_hwnd};
         }
         elsif ( $prop_name eq 'focused' ) {    # text_input / password
             SetFocus( $record->{hwnd} ) if $value;
@@ -1944,6 +2467,12 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         }
         elsif ( $prop_name eq 'min' || $prop_name eq 'max' ) {
             my $t = $record->{node}->type;
+            if ( $t eq 'date_picker' ) {
+                my $min = $prop_name eq 'min' ? $value : $record->{node}->min;
+                my $max = $prop_name eq 'max' ? $value : $record->{node}->max;
+                $self->_set_date_range( $record->{hwnd}, $min, $max );
+                return;
+            }
             return unless $t eq 'slider' || $t eq 'spin_box' || $t eq 'progress_bar';
             my $min = $prop_name eq 'min' ? $value : $record->{node}->min;
             my $max = $prop_name eq 'max' ? $value : $record->{node}->max;
@@ -2003,6 +2532,24 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         }
         SetWindowPos( $record->{hwnd}, undef, $x + $mx, $y + $my, $w, $h, 0x0004 );
 
+        # Image: the SS_BITMAP content is rasterized to the widget's box, so a size or fit change
+        # (from an initial mount at the default 16x16 or a window resize) re-rasters the source.
+        if ( $record->{node} && $record->{node}->type eq 'image' ) {
+            my $new_fit = $record->{node}->object_fit // 'contain';
+            if ( $record->{img_w} != $w || $record->{img_h} != $h || ( $record->{img_fit} // '' ) ne $new_fit ) {
+                $record->{img_w}  = $w;
+                $record->{img_h}  = $h;
+                $record->{img_fit} = $new_fit;
+                my $hb = $self->_raster_hbitmap( $record->{node}->src, $w, $h, $new_fit );
+SendMessageW( $record->{hwnd}, 0x0172, 0, $hb ) if $hb;    # STM_SETIMAGE (IMAGE_BITMAP = 0)
+            }
+        }
+
+        # Canvas: size changed → invalidate for a repaint at the new dimensions.
+        if ( $record->{node} && $record->{node}->type eq 'canvas' ) {
+            InvalidateRect( $record->{hwnd}, undef, 0 );
+        }
+
         # Status bar: pane edges are proportional to the node width, so re-part on every resize
         # (SB_SETPARTS moves the edges; the per-pane texts are untouched).
         if ( $record->{node} && $record->{node}->type eq 'status_bar' ) {
@@ -2015,6 +2562,17 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             my $sw = GetSystemMetrics(2);    # SM_CXVSCROLL
             SetWindowPos( $record->{hwnd}, undef, $x + $mx,            $y + $my, $w - $sw, $h, 0x0004 );
             SetWindowPos( $record->{aux},  undef, $x + $mx + $w - $sw, $y + $my, $sw,      $h, 0x0004 );
+        }
+
+        # A search input's icon glyph (left strip) and clear button (right strip) ride along with
+        # the edit; the edit's own EM_SETMARGINS keep the strips free of text.
+        if ( $record->{node} && $record->{node}->type eq 'search_input' ) {
+            if ( $record->{icon_hwnd} ) {
+                SetWindowPos( $record->{icon_hwnd}, undef, $x + $mx + 4, $y + $my + int( ( $h - 16 ) / 2 ), 16, 16, 0x0004 );
+            }
+            if ( $record->{aux} ) {
+                SetWindowPos( $record->{aux}, undef, $x + $mx + $w - 20, $y + $my, 20, $h, 0x0004 );
+            }
         }
     }
 
@@ -2865,9 +3423,318 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $suppress_events = 0;
     }
 
+    #  GDI+ icon loader (also used by the future Image widget / menu glyphs)
+    #
+    # Lazily starts GDI+ (flat API; gdiplus.dll ships with Windows), decodes a file path or a
+    # data:image/...;base64,.. URI, scales it to a square $size, and returns a cached HICON
+    # (ImageList_AddIcon copies the pixels, so HICONs live for the driver lifetime).
+    method _gdiplus_ensure () {
+        return if $gdi_started;
+        my $in  = malloc(24);
+        memcpy( $in, pack( 'L< x4 Q< L< L<', 1, 0, 0, 0 ), 24 );    # GdiplusStartupInput{ver=1, cb=NULL, no_bg=F, no_codecs=F}
+        my $tok = malloc(8);
+        my $st  = GdiplusStartup( Affix::address($tok), Affix::address($in), undef );
+        $gdi_token = unpack( 'Q<', Affix::raw( $tok, 8 ) ) if !$st;
+        $gdi_started = 1;
+        free($tok);
+        free($in);
+    }
+
+    method _icon_hicon ( $spec, $size ) {
+        $self->_gdiplus_ensure;
+        my $key = "$spec\@$size";
+        return $icon_cache->{$key} if exists $icon_cache->{$key};
+
+        my ( $img, $w, $h ) = $self->_gdi_image($spec);
+        return 0 unless $img;
+
+        # Draw into a square 32bpp ARGB bitmap (0x0026200A = PixelFormat32bppARGB) then turn it
+        # into an HICON (alpha preserved; ImageList_AddIcon keeps the transparency).
+        my $bmp = malloc(8);
+        GdipCreateBitmapFromScan0( $size, $size, $size * 4, 0x0026200A, 0, Affix::address($bmp) );
+        my $bm = unpack( 'Q<', Affix::raw( $bmp, 8 ) );
+        my $g  = malloc(8);
+        GdipGetImageGraphicsContext( $bm, Affix::address($g) );
+        my $gc = unpack( 'Q<', Affix::raw( $g, 8 ) );
+        GdipSetInterpolationMode( $gc, 7 );    # HighQualityBicubic
+        GdipDrawImageRectRectI( $gc, $img, 0, 0, $size, $size, 0, 0, $w, $h, 2, 0, 0, 0 );
+
+        my $hic   = malloc(8);
+        my $st2   = GdipCreateHICONFromBitmap( $bm, Affix::address($hic) );
+        my $hicon = unpack( 'Q<', Affix::raw( $hic, 8 ) );
+
+        GdipDeleteGraphics($gc);
+        GdipDisposeImage($bm);
+        GdipDisposeImage($img);
+        free($g);
+        free($bmp);
+        free($hic);
+        return 0 if $st2 != 0 || !$hicon;
+        $icon_cache->{$key} = $hicon;
+        return $hicon;
+    }
+
+    # Decode a raster from a file path or data:image/...;base64,.. URI into a raw GDI+ Image
+    # pointer plus its natural dimensions. The temp file (for data URIs) is removed once decoded;
+    # the CALLER owns the image and must GdipDisposeImage it.
+    method _gdi_image ( $spec ) {
+        $self->_gdiplus_ensure;
+        return () unless defined $spec && length $spec;
+
+        my ( $path, $tmp );
+        if ( $spec =~ m{^data:image/[^;,]+;base64,(.*)$}s ) {
+            require MIME::Base64;
+            require File::Temp;
+            my $bytes = MIME::Base64::decode_base64($1);
+            my $fh;
+            ( $fh, $path ) = File::Temp::tempfile( 'uji_img_XXXXXX', SUFFIX => '.png', OPEN => 1 );
+            binmode $fh;
+            print {$fh} $bytes;
+            close $fh;
+            $tmp = 1;
+        }
+        else {
+            $path = $spec;
+        }
+
+        # GdipLoadImageFromFile needs a UTF-16 path (GDI+ is Unicode-only); it fully decodes into
+        # its own buffer. Note the DLL export has no W suffix: GdipLoadImageFromFile, not ...W.
+        my $wpath = encode( 'UTF-16LE', $self->_nz($path) ) . "\x00\x00\x00\x00";
+        my $wp    = malloc( CORE::length($wpath) );
+        memcpy( $wp, $wpath, CORE::length($wpath) );
+
+        my $imgp = malloc(8);
+        my $st   = GdipLoadImageFromFile( Affix::address($wp), Affix::address($imgp) );
+        free($wp);
+        my $img = unpack( 'Q<', Affix::raw( $imgp, 8 ) );
+        if ( $st != 0 || !$img ) {
+            free($imgp);
+            unlink $path if $tmp;
+            return ();
+        }
+
+        my $uw = malloc(4);
+        my $uh = malloc(4);
+        GdipGetImageWidth(  $img, Affix::address($uw) );
+        GdipGetImageHeight( $img, Affix::address($uh) );
+        my $w = unpack( 'L<', Affix::raw( $uw, 4 ) );
+        my $h = unpack( 'L<', Affix::raw( $uh, 4 ) );
+        free($uw);
+        free($uh);
+        unlink $path if $tmp;
+        return ( $img, $w, $h );
+    }
+
+    # Natural raster dimensions (Layout's measure_image seam). Cached per spec; reuses the decode
+    # so an Image laid out at its natural size needs no extra full raster.
+    method measure_image ( $spec ) {
+        return ( 0, 0 ) unless defined $spec && length $spec;
+        $self->_gdiplus_ensure;
+        return @{ $img_dims->{$spec} } if $img_dims->{$spec};
+        my ( $img, $w, $h ) = $self->_gdi_image($spec);
+        return ( 0, 0 ) unless $img;
+        GdipDisposeImage($img);
+        $img_dims->{$spec} = [ $w, $h ] if $w && $h;
+        return ( $w, $h );
+    }
+
+    # Raster a source into an HBITMAP sized EXACTLY $w x $h, scaling per $fit:
+    #   fill    - stretch to fill the box (aspect ignored)
+    #   contain - fit the whole image inside, centered (letterboxed)
+    #   cover   - fill the box, cropping the overflow (center crop)
+    # Cached per spec\@w\@h\@fit; HBITMAPs live for the driver lifetime (a STATIC SS_BITMAP does
+    # NOT copy the bitmap, so the cached handle must stay valid).
+    method _raster_hbitmap ( $spec, $w, $h, $fit ) {
+        $self->_gdiplus_ensure;
+        $fit //= 'contain';
+        return 0 unless defined $spec && length $spec;
+        $w = 16 if $w < 1;
+        $h = 16 if $h < 1;
+        my $key = "$spec\@$w\@$h\@$fit";
+        return $bitmap_cache->{$key} if exists $bitmap_cache->{$key};
+
+        my ( $img, $iw, $ih ) = $self->_gdi_image($spec);
+        return 0 unless $img && $iw && $ih;
+
+        my $bmp = malloc(8);
+        GdipCreateBitmapFromScan0( $w, $h, $w * 4, 0x0026200A, 0, Affix::address($bmp) );
+        my $bm = unpack( 'Q<', Affix::raw( $bmp, 8 ) );
+        my $g  = malloc(8);
+        GdipGetImageGraphicsContext( $bm, Affix::address($g) );
+        my $gc = unpack( 'Q<', Affix::raw( $g, 8 ) );
+        GdipSetInterpolationMode( $gc, 7 );    # HighQualityBicubic
+
+        my ( $dx, $dy, $dw, $dh, $sx, $sy, $sw, $sh ) = ( 0, 0, 0, 0, 0, 0, 0, 0 );
+        if ( $fit eq 'fill' ) {
+            ( $dw, $dh, $sw, $sh ) = ( $w, $h, $iw, $ih );
+        }
+        elsif ( $fit eq 'cover' ) {
+            my $scale = $w / $iw > $h / $ih ? $w / $iw : $h / $ih;
+            $sw = int( $w / $scale );
+            $sh = int( $h / $scale );
+            $sx = int( ( $iw - $sw ) / 2 );
+            $sy = int( ( $ih - $sh ) / 2 );
+            ( $dw, $dh ) = ( $w, $h );
+        }
+        else {    # contain
+            my $scale = $w / $iw < $h / $ih ? $w / $iw : $h / $ih;
+            $dw = int( $iw * $scale );
+            $dh = int( $ih * $scale );
+            $dx = int( ( $w - $dw ) / 2 );
+            $dy = int( ( $h - $dh ) / 2 );
+            ( $sw, $sh ) = ( $iw, $ih );
+        }
+        GdipDrawImageRectRectI( $gc, $img, $dx, $dy, $dw, $dh, $sx, $sy, $sw, $sh, 2, 0, 0, 0 );
+
+        # Composite onto the standard dialog face colour so transparent pixels render like the
+        # window's background (GDI STATIC draws the bitmap opaquely; its alpha channel is ignored).
+        my $hbm = malloc(8);
+        my $st  = GdipCreateHBITMAPFromBitmap( $bm, Affix::address($hbm), 0x00F0F0F0 );
+        GdipDeleteGraphics($gc);
+        GdipDisposeImage($bm);
+        GdipDisposeImage($img);
+        free($g);
+        free($bmp);
+        free($hbm);
+        my $hbitmap = unpack( 'Q<', Affix::raw( $hbm, 8 ) );
+        return 0 if $st != 0 || !$hbitmap;
+        $bitmap_cache->{$key} = $hbitmap;
+        return $hbitmap;
+    }
+
+    # Paint one canvas control on WM_PAINT. The draw callback renders into a GDI+ back-buffer
+    # the size of the client rect, the buffer is composited to an HBITMAP, and the HBITMAP is
+    # blitted to the window DC. Everything is torn down per paint (no cache); the node read
+    # here is the CURRENT one (kept fresh by update_registry), so a reconciled on_draw or
+    # background is picked up on the next repaint without any driver state to sync.
+    method _paint_canvas ($hwnd) {
+        $self->_gdiplus_ensure;
+        my $rec = $self->_get_registry_by_hwnd($hwnd) or return 0;
+        my $node = $rec->{node} or return 0;
+
+        my $cr = malloc( sizeof( RECT() ) );
+        GetClientRect( $hwnd, $cr );
+        my $rect = cast( $cr, RECT() );
+        my $w = $rect->{right} - $rect->{left};
+        my $h = $rect->{bottom} - $rect->{top};
+        free($cr);
+        return 0 if $w < 1 || $h < 1;
+
+        my $ps  = malloc( sizeof( PAINTSTRUCT() ) );
+        my $hdc = BeginPaint( $hwnd, $ps );
+
+        # GDI+ back-buffer: draw into a bitmap, composite to an HBITMAP onto the dialog face,
+        # then BitBlt. (PixelFormat32bppPARGB like the image raster, which composites cleanly
+        # in GdipCreateHBITMAPFromBitmap.)
+        my $bmp = malloc(8);
+        GdipCreateBitmapFromScan0( $w, $h, $w * 4, 0x0026200A, 0, Affix::address($bmp) );
+        my $bm = unpack( 'Q<', Affix::raw( $bmp, 8 ) );
+        my $g  = malloc(8);
+        GdipGetImageGraphicsContext( $bm, Affix::address($g) );
+        my $gc = unpack( 'Q<', Affix::raw( $g, 8 ) );
+        GdipSetSmoothingMode( $gc, 2 );    # HighQuality
+
+        my $bg   = $node->background // '#F0F0F0';
+        my $draw = Uji::Draw::Win32->new( gc => $gc, w => $w, h => $h );
+        $draw->clear($bg);
+        if ( my $cb = $node->on_draw ) {
+            $cb->($draw);
+        }
+
+        my $hbm = malloc(8);
+        GdipCreateHBITMAPFromBitmap( $bm, Affix::address($hbm), 0x00F0F0F0 );
+        GdipDeleteGraphics($gc);
+        GdipDisposeImage($bm);
+        free($g);
+        free($bmp);
+        my $hb = unpack( 'Q<', Affix::raw( $hbm, 8 ) );
+        free($hbm);
+
+        if ($hb) {
+            my $mem = CreateCompatibleDC($hdc);
+            my $old = SelectObject( $mem, $hb );
+            BitBlt( $hdc, 0, 0, $w, $h, $mem, 0, 0, 0x00CC0020 );    # SRCCOPY
+            SelectObject( $mem, $old );
+            DeleteDC($mem);
+            DeleteObject($hb);
+        }
+
+        EndPaint( $hwnd, $ps );
+        free($ps);
+        return 0;
+    }
+
+    # Pre-render a spinner's animation as a cached list of HICON frames (12 slices of a GDI+ spoke
+    # "fan" that rotates: a bright head spoke with a dimming tail). GdipDrawLineI keeps integer
+    # coords at the FFI boundary (GdipDrawArc's six REAL args mis-marshal over the current Affix).
+    # One frame set per size@color; the WM_TIMER handler (see _ctrl_msg) swaps icons on a STATIC
+    # SS_ICON host.
+    method _spinner_frames ( $size, $color ) {
+        $self->_gdiplus_ensure;
+        $color //= '#2e5d8c';
+        $size  = 24 if $size < 16;
+        my $key = join '@', $size, $color;
+        return $spin_cache->{$key} if $spin_cache->{$key};
+
+        my $hex = $color;
+        $hex =~ s/^#//;
+        my $rgb  = hex $hex;
+        my $argb = 0xFF000000 | ( ( $rgb & 0xFF ) << 16 ) | ( $rgb & 0x00FF00 ) | ( ( $rgb >> 16 ) & 0xFF );
+
+        # Eleven spokes lit per frame. Each spoke is drawn with its own pen so the brightness
+        # falls off towards the tail; the fan rotates one spoke-step per frame.
+        my $pen_w = ( $size / 8 ) < 2 ? 2 : $size / 8;
+        my @pens;
+        my @pen_objs;
+        for my $i ( 0 .. 10 ) {
+            my $alpha = int( 255 - ( 255 * $i / 11 ) );
+            my $pp    = malloc(8);
+            GdipCreatePen1( ( $alpha << 24 ) | ( $argb & 0x00FFFFFF ), $pen_w, 2, Affix::address($pp) );
+            push @pen_objs, $pp;
+            push @pens, unpack( 'Q<', Affix::raw( $pp, 8 ) );    # raw GpPen* (Affix passes ints, not objects)
+        }
+
+        my ( $cx, $cy ) = ( $size / 2, $size / 2 );
+        my $ro = $size / 2 - 2;
+        my $ri = $ro / 2;
+        my $step = 360 / 12;
+        my @frames;
+        for my $f ( 0 .. 11 ) {
+            my $bmp = malloc(8);
+            GdipCreateBitmapFromScan0( $size, $size, $size * 4, 0x0026200A, 0, Affix::address($bmp) );
+            my $bm = unpack( 'Q<', Affix::raw( $bmp, 8 ) );
+            my $g  = malloc(8);
+            GdipGetImageGraphicsContext( $bm, Affix::address($g) );
+            my $gc = unpack( 'Q<', Affix::raw( $g, 8 ) );
+            GdipSetSmoothingMode( $gc, 2 );    # SmoothingModeAntiAlias
+            for my $k ( 0 .. 10 ) {
+                my $rad = ( $f * $step + $k * $step ) * 3.14159265358979 / 180;
+                my ( $x1, $y1 ) = ( $cx + $ri * cos($rad), $cy + $ri * sin($rad) );
+                my ( $x2, $y2 ) = ( $cx + $ro * cos($rad), $cy + $ro * sin($rad) );
+                GdipDrawLineI( $gc, $pens[$k], int $x1, int $y1, int $x2, int $y2 );
+            }
+            my $hic = malloc(8);
+            GdipCreateHICONFromBitmap( $bm, Affix::address($hic) );
+            my $hicon = unpack( 'Q<', Affix::raw( $hic, 8 ) );
+            GdipDeleteGraphics($gc);
+            GdipDisposeImage($bm);
+            free($g);
+            free($bmp);
+            free($hic);
+            push @frames, $hicon if $hicon;
+        }
+        for my $i ( 0 .. $#pen_objs ) { GdipDeletePen( $pens[$i] ); free( $pen_objs[$i] ); }
+        $spin_cache->{$key} = \@frames;
+        return \@frames;
+    }
+
     # Toolbar population: delete every existing button, then build an array of 32-byte TBBUTTON
-    # structs and push them in one TB_ADDBUTTONSW. Text-only buttons use I_IMAGENONE (-2) with
-    # a TB_ADDSTRINGW string table entry per label; separator buttons set fsStyle=BTNS_SEP (0x01)
+    # structs and push them in one TB_ADDBUTTONSW. Buttons carrying an `icon` feed a per-toolbar
+    # CImageList (ILC_COLOR32, $icon_size square) attached via TB_SETIMAGELIST; icon-free buttons
+    # use I_IMAGENONE (-2). Every label goes through TB_ADDSTRINGW -- which REQUIRES wParam=0 (a
+    # raw pointer, not a count) and a DOUBLE-null-terminated buffer, per the modern docs; the old
+    # call passed wParam=1 and single-null, so TB_ADDSTRINGW returned -1, iString stayed 0, and
+    # the labels never rendered ("blank buttons"). Separator buttons set fsStyle=BTNS_SEP (0x01)
     # with the width in iBitmap. Each button gets a unique idCommand from $cmd_counter (0x4000+)
     # so WM_COMMAND routing never collides with control IDs in the registry.
     method _populate_toolbar ( $id, $buttons = undef ) {
@@ -2881,13 +3748,54 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $old_cnt = SendMessageW( $hwnd, 0x0418, 0, 0 );           # TB_BUTTONCOUNT
         SendMessageW( $hwnd, 0x0416, 0, 0 ) while $old_cnt-- > 0;    # TB_DELETEBUTTON
 
-        # Drop stale WM_COMMAND routing entries for this toolbar.
-        my $tb = $rec->{toolbar} ||= { by_cmd => {} };
+        # Drop stale WM_COMMAND routing entries and any previous image list for this toolbar.
+        my $tb = $rec->{toolbar} ||= { by_cmd => {}, himl => 0 };
         for my $cmd ( keys %{ $tb->{by_cmd} } ) {
             delete $toolbar_cmds->{$cmd};
         }
         $tb->{by_cmd} = {};
+        if ( my $old = delete $tb->{himl} ) {
+            SendMessageW( $hwnd, 0x0430, 0, 0 );    # TB_SETIMAGELIST(NULL): detach before destroying
+            ImageList_Destroy($old);
+        }
         return unless @$buttons;
+
+        # Build the toolbar image list (buttons keep their first-seen order: a shared spec is one
+        # image, reused by every button referencing it). icon_size defaults to 16px.
+        my $is = $node->icon_size // 16;
+        my %icon_idx;
+        {
+            my $i = 0;
+            for my $b (@$buttons) {
+                next unless $b->{icon} && !exists $icon_idx{ $b->{icon} };
+                $icon_idx{ $b->{icon} } = $i++;
+            }
+        }
+        if (%icon_idx) {
+            my $himl = ImageList_Create( $is, $is, 0x20, 0, 1 );    # ILC_COLOR32
+            my $ok   = 0;
+            for my $spec ( sort { $icon_idx{$a} <=> $icon_idx{$b} } keys %icon_idx ) {
+                my $hicon = $self->_icon_hicon( $spec, $is ) or next;
+                my $got   = ImageList_AddIcon( $himl, $hicon );
+                if ( $got >= 0 ) {
+                    $ok++;
+                    $icon_idx{$spec} = $got;
+                }
+                else {
+                    delete $icon_idx{$spec};
+                }
+            }
+            if ($ok) {
+                $tb->{himl} = $himl;
+                # lParam is SSize_t in this affix (see line ~98): pass the raw ADDRESS, not the
+                # boxed pointer object -- Affix would otherwise marshal the Perl SV's own address.
+                SendMessageW( $hwnd, 0x0430, 0, Affix::address($himl) );    # TB_SETIMAGELIST
+            }
+            else {
+                ImageList_Destroy($himl);
+            }
+        }
+
         my @structs;
         for my $b (@$buttons) {
             if ( $b->{separator} ) {
@@ -2897,26 +3805,28 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 next;
             }
 
-            # Allocate a string table index for the label via TB_ADDSTRINGW (the control
-            # stores a copy; our UTF-16 buffer is freed immediately after the call).
+            # Allocate a string table index for the label via TB_ADDSTRINGW (the control stores
+            # a copy; our UTF-16 buffer is freed immediately after the call). wParam must be 0
+            # and the buffer double-null-terminated (see the comment above the method).
             my $label = $b->{label} // '';
-            my $wide  = Encode::encode( 'UTF-16LE', $self->_nz($label) ) . "\x00\x00";
+            my $wide  = encode( 'UTF-16LE', $self->_nz($label) ) . "\x00\x00\x00\x00";
             my $str   = malloc( CORE::length($wide) );
             memcpy( $str, $wide, CORE::length($wide) );
-            my $str_idx = SendMessageW( $hwnd, 0x044D, 1, Affix::address($str) );    # TB_ADDSTRINGW
+            my $str_idx = SendMessageW( $hwnd, 0x044D, 0, Affix::address($str) );    # TB_ADDSTRINGW
             free($str);
-            my $cmd  = $cmd_counter++;
-            my $fsSt = 0x04;                                                         # TBSTATE_ENABLED
+            my $cmd    = $cmd_counter++;
+            my $fsSt   = 0x04;                                                       # TBSTATE_ENABLED
             $fsSt |= 0x01  if $b->{checked};                                         # TBSTATE_CHECKED
             $fsSt &= ~0x04 if defined $b->{enabled} && !$b->{enabled};               # drop ENABLED when explicitly false
-            push @structs, pack 'l< l< C C x6 q< q<', -2,                            # iBitmap (I_IMAGENONE = -2: no image, text-only layout)
+            my $iBitmap = ( $b->{icon} && exists $icon_idx{ $b->{icon} } ) ? $icon_idx{ $b->{icon} } : -2;
+            push @structs, pack 'l< l< C C x6 q< q<', $iBitmap,
                 $cmd,                                                                # idCommand
                 $fsSt,                                                               # fsState
-                0x00,                                                                # fsStyle (BTNS_BUTTON)
+                0x02,                                                                # fsStyle (BTNS_AUTOSIZE: fit the label)
                 0,                                                                   # dwData
                 $str_idx;                                                            # iString (index into toolbar string table)
             my $bid = $b->{id} // $label;
-            $tb->{by_cmd}{$cmd} = { id => $bid };
+            $tb->{by_cmd}{$cmd} = { id => $bid, iBitmap => $iBitmap };
             $toolbar_cmds->{$cmd} = $id;
         }
 
@@ -2926,6 +3836,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         memcpy( $arr, $body, CORE::length($body) );
         SendMessageW( $hwnd, 0x0444, scalar @structs, Affix::address($arr) );    # TB_ADDBUTTONSW
         free($arr);
+        SendMessageW( $hwnd, 0x0421, 0, 0 );                                     # TB_AUTOSIZE
     }
 
     # Menu bar population: build a native menu tree from a window node's menu_bar property and
@@ -3106,12 +4017,13 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 DestroyWindow($hw);
                 delete $surface_by_hwnd->{$hw};
             }
+            delete $cid_to_id->{ $rec->{cid} } if $rec->{cid};
             delete $registry->{ $node->id };
         }
         $self->unmount_subtree($_) for @{ $node->children };
     }
 
-    # ─── System dialogs (COMCTL-native, blocking) ─────────────────────────────
+    #  System dialogs (COMCTL-native, blocking)
     # Convert a filter spec into the double-NUL-terminated UTF-16 blob that
     # lpstrFilter expects: "label\0pattern\0label2\0pattern2\0\0".
     # Accepts an arrayref of [ label, pattern ] pairs or a "Label|*.ext|All|*.*" string.

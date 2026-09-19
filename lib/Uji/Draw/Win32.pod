@@ -1,0 +1,41 @@
+=pod
+
+=head1 NAME
+
+Uji::Draw::Win32 - the GDI+ implementation of Uji::Draw used by the Win32 driver
+
+=head1 DESCRIPTION
+
+C<Uji::Draw::Win32> is the Windows back end of the drawing vocabulary defined by
+L<Uji::Draw>. The driver builds one per canvas paint around a GDI+ graphics
+context pulled from the back-buffer bitmap, clears the box to the node's
+C<background>, hands it to the C<on_draw> callback, then composites the buffer.
+An app never constructs or names it directly - callbacks talk to the L<Uji::Draw>
+API and stay portable.
+
+=head1 CONSTRUCTOR
+
+    my $d = Uji::Draw::Win32->new( gc => $graphics, w => $w, h => $h );
+
+C<gc> is the raw C<GpGraphics*> pointer as an unpacked integer (the driver's
+C<GdipGetImageGraphicsContext> pattern); C<w>/C<h> are the box being painted.
+
+=head1 IMPLEMENTATION NOTES
+
+Each primitive creates and destroys its own GDI+ pen/brush, so a session holds no
+heavyweight state beyond the base's colour, pen width and antialiasing flag.
+
+The integer GDI+ variants are used everywhere (C<GdipDrawLineI>, C<GdipDrawRectI>,
+C<GdipDrawEllipseI>, C<GdipDrawArcI>, ...) because the non-suffixed exports take
+REAL coordinates whose six Float args mis-marshal under the current Affix bindings
+and crash the caller - the same constraint the spinner's spoke fan works under.
+The only remaining Float args are the degree angles of C<GdipDrawArcI>/
+C<GdipFillPieI> (coerced with C<+ 0.0>).
+
+=head1 SEE ALSO
+
+L<Uji::Draw> for the portable vocabulary and the platform contract,
+L<Uji::Node::Canvas> for the widget that drives the paint,
+L<Uji::Driver::Win32> for the host paint loop.
+
+=cut

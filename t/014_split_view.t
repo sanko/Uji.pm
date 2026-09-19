@@ -57,7 +57,7 @@ $move_all->($vtree);
 $layout->compute( $vtree, 0, 0, 320, 420 );
 $move_all->($vtree);
 
-# ─── layout: pane A gets [0..divider], a 6px gap, then pane B ───
+#  layout: pane A gets [0..divider], a 6px gap, then pane B
 my ( $adiv, $avert, $adw ) = $drv->split_position( $sv, $sv->bw, $sv->bh );
 is $adw,    6,                 'split resolves the divider width';
 is $avert,  1,                 'vertical split resolved as vertical';
@@ -103,7 +103,7 @@ sub window_top {
 my $oy = client_origin_y( $wrb->{hwnd} );
 is window_top( $svr->{aux} ) - $oy, $sv->by + 120, 'divider strip parked on the layout divider line';
 
-# ─── set_prop: divider + orientation route through the driver ───
+#  set_prop: divider + orientation route through the driver
 $drv->set_prop( $sv->id, 'divider', 150 );
 is $svr->{divider},                 150,           'set_prop divider updates the record';
 is window_top( $svr->{aux} ) - $oy, $sv->by + 150, 'set_prop divider moves the strip';
@@ -120,7 +120,7 @@ $drv->set_prop( $sv->id, 'orientation', 'vertical' );
 $drv->set_prop( $sv->id, 'divider',     120 );
 is window_top( $svr->{aux} ) - $oy, $sv->by + 120, 'orientation swap back re-parks the strip';
 
-# ─── split_position clamping is deterministic for the range edges ───
+#  split_position clamping is deterministic for the range edges
 {
     my $tiny = Uji::split_view( Uji::row( children => [] ), Uji::row( children => [] ), orientation => 'vertical', divider => 5, min_a => 40,
         min_b => 40 );
@@ -137,7 +137,7 @@ is window_top( $svr->{aux} ) - $oy, $sv->by + 120, 'orientation swap back re-par
     is $d2, 154, 'divider over the track clamps down (200 - 6 - 40)';
 }
 
-# ─── drag: capture + WM_MOUSEMOVE dispatch on_divider inside the clamp range ───
+#  drag: capture + WM_MOUSEMOVE dispatch on_divider inside the clamp range
 $chan->get() while $chan->size;
 Uji::Driver::Win32::SendMessageW( $svr->{aux}, 0x0201, 0, 0 );    # WM_LBUTTONDOWN
 Uji::Driver::Win32::SendMessageW( $svr->{aux}, 0x0200, 0, 0 );    # WM_MOUSEMOVE
@@ -152,7 +152,7 @@ ok $pos >= 40 && $pos <= $max_div, 'drag position clamped to the pane min/max';
 is $dmsg && $dmsg->{pos}, $pos, 'on_divider received the live clamped position';
 is window_top( $svr->{aux} ) - $oy, $sv->by + $pos, 'strip follows the drag with no render';
 
-# ─── reconciler: a divider prop change routes to set_prop with the new id ───
+#  reconciler: a divider prop change routes to set_prop with the new id
 {
     my $recon = Uji::Reconciler->new;
     my $old   = Uji::split_view( Uji::column( children => [] ), Uji::column( children => [] ), orientation => 'vertical', divider => 120 );
@@ -165,7 +165,7 @@ is window_top( $svr->{aux} ) - $oy, $sv->by + $pos, 'strip follows the drag with
     is window_top( $svr->{aux} ) - $oy, $sv->by + 180, 'reconciled divider re-parks the strip';
 }
 
-# ─── window resize rescales the divider so the relative position survives ───
+#  window resize rescales the divider so the relative position survives
 {
     my $cur    = $svr->{node};                                       # the reconciled, current model split node
     my $ratio0 = $svr->{div_ratio};

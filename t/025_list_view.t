@@ -15,7 +15,7 @@ Affix::affix 'user32', 'PostMessageW', [ Pointer[Void], UInt, Size_t, SSize_t ] 
 #
 skip_all 'Win32 only' unless $^O eq 'MSWin32';
 
-# ── List-view constants ──────────────────────────────────────────────────────
+#  List-view constants
 my $LVM_GETITEMCOUNT     = 0x1004;
 my $LVM_GETITEMSTATE     = 0x102C;
 my $LVM_GETITEMTEXTW     = 0x1073;
@@ -27,7 +27,7 @@ my $chan                 = Acme::Parataxis::Channel->new( capacity => 1024 );
 my $drv                  = Uji::Driver::Win32->new;
 $drv->init($chan);
 
-# ── Set up a window containing a list_view ───────────────────────────────────
+#  Set up a window containing a list_view
 my $lv = Uji::list_view(
     value       => 'b',
     columns     => [ { label => 'Fruit', width => 140 }, { label => 'Qty', width => 70 } ],
@@ -56,7 +56,7 @@ my $wrb = $drv->_get_registry_record( $vwin->id );
 my $lr  = $drv->_get_registry_record( $lv->id );
 ok $lr && $lr->{hwnd}, 'list_view has a registry record with a real HWND';
 
-# ── 1. Class name is SysListView32 ───────────────────────────────────────────
+#  1. Class name is SysListView32
 my $cls = '';
 {
     my $buf = Affix::malloc(128);
@@ -67,18 +67,18 @@ my $cls = '';
 }
 is $cls, 'SysListView32', 'mounts SysListView32';
 
-# ── 2. Row count: 3 mounted rows ─────────────────────────────────────────────
+#  2. Row count: 3 mounted rows
 my $count = Uji::Driver::Win32::SendMessageW( $lr->{hwnd}, $LVM_GETITEMCOUNT, 0, 0 );
 is $count, 3, 'LVM_GETITEMCOUNT returns 3 rows';
 
-# ── 3. Column widths match the model ─────────────────────────────────────────
+#  3. Column widths match the model
 my $cw0 = Uji::Driver::Win32::SendMessageW( $lr->{hwnd}, 0x101D, 0, 0 );    # LVM_GETCOLUMNWIDTH
 my $cw1 = Uji::Driver::Win32::SendMessageW( $lr->{hwnd}, 0x101D, 1, 0 );
 is $cw0, 140, 'column 0 width is 140';
 is $cw1, 70,  'column 1 width is 70';
 is Uji::Driver::Win32::SendMessageW( $lr->{hwnd}, 0x101D, 2, 0 ), 0, 'no third column exists';
 
-# ── 4. UTF-8 cell round-trips through LVM_GETITEMTEXTW ───────────────────────
+#  4. UTF-8 cell round-trips through LVM_GETITEMTEXTW
 {
     my $buf = Affix::malloc(256);
     my $lvitem = pack 'L< l< l< L< L< x4 q< l< l< q< l< l< L< x4 q< q< l< x4',
@@ -93,13 +93,13 @@ is Uji::Driver::Win32::SendMessageW( $lr->{hwnd}, 0x101D, 2, 0 ), 0, 'no third c
     is $cell, 'café ✓', 'row 2 col 1 text round-trips as UTF-8';
 }
 
-# ── 5. Mount selection: value='b' selects row 1 ──────────────────────────────
+#  5. Mount selection: value='b' selects row 1
 my $st0 = Uji::Driver::Win32::SendMessageW( $lr->{hwnd}, $LVM_GETITEMSTATE, 0, $LVIS_SELECTED );
 my $st1 = Uji::Driver::Win32::SendMessageW( $lr->{hwnd}, $LVM_GETITEMSTATE, 1, $LVIS_SELECTED );
 ok !( $st0 & $LVIS_SELECTED ), 'row 0 is not selected';
 ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
 
-# ── 6. LVN_ITEMCHANGED: simulate a click on row 2 (value='c') ────────────────
+#  6. LVN_ITEMCHANGED: simulate a click on row 2 (value='c')
 {
     my $nm = "\0" x 64;
     substr( $nm, 0, 8 )  = pack( 'q<', $lr->{hwnd} );      # NMHDR.hwndFrom
@@ -120,7 +120,7 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
     is $msg->{value}, 'c',      'channel message value is Cherries row';
 }
 
-# ── 7. Focus-only notification (no LVIS_SELECTED) is ignored ─────────────────
+#  7. Focus-only notification (no LVIS_SELECTED) is ignored
 {
     my $nm = "\0" x 64;
     substr( $nm, 0, 8 )  = pack( 'q<', $lr->{hwnd} );
@@ -135,7 +135,7 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
     ok !$chan->size, 'focus-only LVN_ITEMCHANGED is ignored';
 }
 
-# ── 8. set_prop('value'): move selection to 'a' (row 0) ──────────────────────
+#  8. set_prop('value'): move selection to 'a' (row 0)
 {
     $drv->set_prop( $lv->id, 'value', 'a' );
     my $s0 = Uji::Driver::Win32::SendMessageW( $lr->{hwnd}, $LVM_GETITEMSTATE, 0, $LVIS_SELECTED );
@@ -146,7 +146,7 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
     ok !$chan->size, 'programmatic selection produces no on_select echo';
 }
 
-# ── 9. Reconciler: change rows (add a row 'd') + change value ('d') ──────────
+#  9. Reconciler: change rows (add a row 'd') + change value ('d')
 {
     my $recon    = Uji::Reconciler->new;
     my $old_lv   = Uji::list_view( value => 'a', columns => $lv->columns, rows => $lv->rows, );
@@ -163,7 +163,7 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
     ok $s3 & $LVIS_SELECTED, 'reconciled value change selects the new row 3';
 }
 
-# ── 10. Multi-select: arrayref value + arrayref on_select payload ────────────
+#  10. Multi-select: arrayref value + arrayref on_select payload
 {
     my ( $mwnd, $mr );
     my $multi = Uji::list_view(
@@ -228,7 +228,7 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
     Uji::Driver::Win32::SendMessageW( $mwnd->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE
 }
 
-# ── 11. Column sorting (LVN_COLUMNCLICK) + column reorder sync ───────────────
+#  11. Column sorting (LVN_COLUMNCLICK) + column reorder sync
 {
     my $cell = sub ($hwnd, $row, $col) {
         my $buf = Affix::malloc(256);
@@ -339,7 +339,7 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
     Uji::Driver::Win32::SendMessageW( $swr->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE
 }
 
-# ── 12. Per-column display format ─────────────────────────────────────────────
+#  12. Per-column display format
 {
     my $cell = sub ($hwnd, $row, $col) {
         my $buf = Affix::malloc(256);
@@ -382,7 +382,7 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
     Uji::Driver::Win32::SendMessageW( $fwr->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE
 }
 
-# ── 13. Width/order persistence + sort indicator ──────────────────────────────
+#  13. Width/order persistence + sort indicator
 {
     my $widths = sub ($hwnd) {
         return join( ',', map { Uji::Driver::Win32::SendMessageW( $hwnd, 0x101D, $_, 0 ) } 0 .. 1 );
@@ -496,7 +496,7 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
     Uji::Driver::Win32::SendMessageW( $pwr->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE
 }
 
-# ── 14. Per-column alignment ──────────────────────────────────────────────────
+#  14. Per-column alignment
 {
     my $colfmt = sub ($hwnd, $col) {
         my $lvcol = pack 'L< l< l< x4 q< l< l< l< l< l< l< l< L< q< l< x4',
@@ -532,7 +532,7 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
     Uji::Driver::Win32::SendMessageW( $awr->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE
 }
 
-# ── 15. MODEL-convention: sort a reordered 4-col list where the clicked (MODEL) column ───────
+#  15. MODEL-convention: sort a reordered 4-col list where the clicked (MODEL) column
 #        does NOT display at its model slot. Native LVN_COLUMNCLICK.iSubItem is the MODEL
 #        identity; the glyph must follow the sorted MODEL column wherever it displays — never
 #        shift a second time onto whatever column now occupies the clicked visual slot.
@@ -594,7 +594,7 @@ ok $st1 & $LVIS_SELECTED,      'row 1 (value b) is selected at mount';
     Uji::Driver::Win32::SendMessageW( $r4winr->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE
 }
 
-# ─── clean up ───
+#  clean up
 Uji::Driver::Win32::SendMessageW( $wrb->{hwnd}, 0x0010, 0, 0 );    # WM_CLOSE
 #
 done_testing;

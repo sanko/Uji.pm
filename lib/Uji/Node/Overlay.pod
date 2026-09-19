@@ -1,0 +1,88 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::Overlay - a container that stacks its children in the same plane
+
+=head1 SYNOPSIS
+
+    Uji::overlay(
+        children => [
+            Uji::text( 'A demo frame', w => 388, h => 180, align => 'center' ),
+            Uji::button(
+                id      => 'badge',
+                label   => '5 hits',
+                fit     => 'content',
+                align_w => 'end',
+                align_h => 'end',
+                on_click => { type => 'COUNT' },
+            ),
+        ],
+    );
+
+=head1 DESCRIPTION
+
+An C<overlay> places every child in the SAME box, stacked on top of one another - the
+toolkit equivalent of CSS absolute positioning. Array order IS the draw order: each child
+paints over the previous one, so list the lowest layer first and the topmost layer last.
+
+Each LAYER (child) sizes itself by the usual rules: a bare C<fit => 'content'> shrink-to-content
+label is the classic "badge" over a full-frame first child. An explicit C<w>/C<h> pins a fixed
+size, containers fill the overlay box by default, and C<align_w>/C<align_h> offset a layer that did
+not fill, so a bottom-right corner badge needs only C<align_w =E<gt> 'end', align_h =E<gt> 'end'>.
+
+Only the overlay's own layout is special; it owns no native control (like C<column>/C<row>), so the
+children mount as siblings of the host window. On Win32 the driver re-raises each layer in array
+order after mounting (and after every reconcile) so the LAST child really is on top - native sibling
+creation order would otherwise put the FIRST-created child frontmost. Layers may be hidden/shown with
+C<visible>; a hidden layer simply does not paint.
+
+=head2 Parameters
+
+=over
+
+=item C<children>
+
+The layers, in draw order (last on top). Recomposed live.
+
+=item C<padding>
+
+Inset around the shared layer box (default C<0>). Recomposed live.
+
+=back
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - entry point (exports C<overlay>)
+
+=item * L<Uji::Node::Column>, L<Uji::Node::Row> - the one-axis containers
+
+=item * L<Uji::Node/Common Parameters> - C<align_w>/C<align_h>, C<fit>, C<visible>
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+CSS stack frontmost bottom-right
+
+=end stopwords
+
+=cut

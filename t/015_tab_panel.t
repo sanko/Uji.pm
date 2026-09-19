@@ -69,13 +69,13 @@ $move_all->($vtree);
 $layout->compute( $vtree, 0, 0, 320, 420 );
 $move_all->($vtree);
 
-# ─── the strip row count, and the shared body rect under it ───
+#  the strip row count, and the shared body rect under it
 is Uji::Driver::Win32::SendMessageW( $tpr->{hwnd}, 0x1304, 0, 0 ), 2, 'the strip holds one tab per panel';          # TCM_GETITEMCOUNT
 is Uji::Driver::Win32::SendMessageW( $tpr->{hwnd}, 0x130B, 0, 0 ), 0, 'strip selection matches the model index';    # TCM_GETCURSEL
 is $tp->by + 25, $pa->by, 'panel bodies sit below the native strip';
 is( [ $pa->bx, $pa->by, $pa->bw, $pa->bh ], [ $pb->bx, $pb->by, $pb->bw, $pb->bh ], 'all panels share one body rect' );
 
-# ─── only the active panel's subtree is shown ───
+#  only the active panel's subtree is shown
 ok is_visible( $gar->{hwnd} ),  'active panel (A) content is visible';
 ok !is_visible( $abr->{hwnd} ), 'inactive panel (B) content is hidden';
 my $atr = $drv->_get_registry_record( $pa->children->[1]->id );                                                     # the 'general pane' text
@@ -83,7 +83,7 @@ my $btr = $drv->_get_registry_record( $pb->children->[1]->id );                 
 ok is_visible( $gar->{hwnd} )  && is_visible( $atr->{hwnd} ),  'nested content of the active panel stays visible';
 ok !is_visible( $abr->{hwnd} ) && !is_visible( $btr->{hwnd} ), 'nested content of the inactive panel is hidden';
 
-# ─── WM_NOTIFY / TCN_SELCHANGE: a user tab click routes on_select and flips visibility ───
+#  WM_NOTIFY / TCN_SELCHANGE: a user tab click routes on_select and flips visibility
 $chan->get() while $chan->size;
 {
     # A real click updates the native selection AND posts TCN_SELCHANGE (code -551) to the host
@@ -105,14 +105,14 @@ $chan->get() while $chan->size;
     ok is_visible( $abr->{hwnd} ),  'panel B shown after switching';
 }
 
-# ─── set_prop index: programmatic switch keeps record, strip and visibility in sync ───
+#  set_prop index: programmatic switch keeps record, strip and visibility in sync
 $drv->set_prop( $tp->id, 'index', 0 );
 is $tpr->{index},                                                  0, 'set_prop index updates the record';
 is Uji::Driver::Win32::SendMessageW( $tpr->{hwnd}, 0x130B, 0, 0 ), 0, 'set_prop index moves the native selection';    # TCM_GETCURSEL
 ok is_visible( $gar->{hwnd} ),  'panel A visible again after set_prop';
 ok !is_visible( $abr->{hwnd} ), 'panel B hidden again after set_prop';
 
-# ─── reconciler: index + panels diffs route to set_prop (bounds first, child loop second) ───
+#  reconciler: index + panels diffs route to set_prop (bounds first, child loop second)
 {
     my $recon = Uji::Reconciler->new;
     my $old   = Uji::tab_panel(
