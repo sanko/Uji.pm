@@ -80,7 +80,12 @@ my $cls = '';
 }
 is $cls =~ /^UjiDividerClass/, 1, 'the divider mounts the dedicated strip class';
 ok $svr->{aux} && $svr->{aux} != $wrb->{hwnd}, 'divider is a real child HWND';
-is Uji::Driver::Win32::GetClassLongPtrW( $svr->{aux}, -10 ), 18, 'divider face is a valid visible brush (COLOR_BTNSHADOW + 1)';   # GCLP_HBRBACKGROUND
+# GCLP_HBRBACKGROUND: the divider class registers _scheme_brush(18, '#3A3A3A') --
+# the classic COLOR_BTNSHADOW+1 pseudo-handle in light mode, a solid GDI brush in dark.
+# Compare against the raw handle the driver registered so the check is scheme-aware.
+my $divider_brush = $drv->_scheme_brush( 18, '#3A3A3A' );
+my $expect_brush  = Affix::address($divider_brush);
+is Uji::Driver::Win32::GetClassLongPtrW( $svr->{aux}, -10 ), $expect_brush, 'divider face is a valid visible brush (registered scheme brush)';
 
 sub client_origin_y {
     my ($hwnd) = @_;

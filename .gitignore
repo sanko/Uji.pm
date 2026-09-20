@@ -35,3 +35,6 @@ temp/
 t/dev/
 
 *.session
+
+# debug screenshots / image-export temps written by probes and t/034_image.t
+uji_img_*

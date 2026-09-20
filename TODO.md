@@ -32,7 +32,16 @@ below). Candidates, roughly in recommended order:
 - [ ] **New widget backlog** (see Widget Set -> Candidate backlog, with Win32/GTK4/Cocoa native controls
       per widget): `Calendar`, `RichText`, `ColorButton`, `FontButton`, `Spinner`, `Separator` (done, see
       below), `Image`, `TrayIcon`, `PopupMenu`, `WebView`, `Canvas`, `GLArea`, `SearchInput`.
-- [ ] **Dark Mode auto-detection + DPI awareness** (lines 306-307).
+- [x] **Dark Mode auto-detection + DPI awareness** (done, see "Resolved Bug: window shrink on a runtime
+      constraint …" below for the DPI plumbing; `SetProcessDpiAwarenessContext`/`SetProcessDPIAware` at init,
+      `_dpi` + `_sx/_sy/_ux/_uy` logical↔physical, `uses_dark_mode` registry probe + `_frame_dark`
+      `DwmSetWindowAttribute`, a `dark_mode => 0|1` force override on the driver, dark scheme-aware
+      defaults for every control (`WM_CTLCOLOR*` now paints light text on dark fills for
+      labels/inputs/listboxes/checks; viewport/divider/prompt/canvas classes get dark brushes), Windows'
+      own dark theming hooked up at runtime (uxtheme ordinals `SetPreferredAppMode`/`AllowDarkModeForWindow`/
+      `FlushMenuThemes` when present + `SetWindowTheme` `DarkMode_Explorer` on every created
+      window/control so scrollbars and combobox popups go dark), and the interactive demo
+      `eg/widget_dark_mode.pl` running `auto`/`dark`/`light` with a live runtime palette preview).
 - [ ] Live sanity pass on `eg/widget_scroll_view.pl` (close out the deferred ScrollView note, lines 297-304).
 - [ ] **More subscription sources** on the `Sub` machinery: focus/blur, close-request, and keyboard chords
       (today only `sub_interval` and `sub_on_resize` exist).
@@ -458,6 +467,50 @@ memory; by-value PBM_GETPOS is the reliable probe).
 
 ---
 
+## Resolved Bug: white boxes instead of dark fills (Affix brush LRESULT / SY address)
+
+**Status: FIXED** (user visually confirmed: the white rectangles are gone; EDIT inputs and STATIC labels
+now paint the dark scheme — verified in-process by sampling each control's own DC via GetPixel).
+**Report:** in dark mode, STATIC labels kept a white trailing block behind the glyphs and EDIT inputs
+painted a white field no matter what brush/text colour `WM_CTLCOLOR*` set. Checkboxes/radios refused to
+go dark at all.
+
+**Root cause (user-diagnosed):** `WM_CTLCOLOR*` returns an HBRUSH as the LRESULT. The driver returned the
+`Affix::CreateSolidBrush` result directly; Affix returns a perl scalar REF-wrapping the handle, and Perl
+numifies it to the SV's heap ADDRESS (probe: `Affix::address` = real handle, `$brush + 0` = SV address,
+different numbers). Windows treated the SV address as a GDI handle, rejected it, and painted white.
+WNDCLASS `hbrBackground` fields were safe (Affix stores the raw address when marshalling a struct), but
+function RETURN values and WNDPROC LRESULTs must hand Windows the raw number.
+
+**Fix (lib/Uji/Driver/Win32.pm):** all three CTLCOLOR return paths (`node background`, dark scheme
+defaults, light `GetSysColorBrush` fallback) now return `Affix::address($brush)` — a plain 64-bit GDI
+handle. WNDPROC LRESULTs in general must be plain integers, not Affix pointer objects.
+
+**Residual (documented, not fixable here):** checkboxes/radios/toggle buttons render their own white box +
+black label in the classic renderer and ignore the CTLCOLOR brush/label colour; push buttons are never
+dark in Win32. `SetWindowTheme(_, 'DarkMode_Explorer', _)` on BUTTON/EDIT is a silent no-op on this build
+(the uxtheme ordinals bind but the Explorer theme has no dark parts for them), so those classes stay in
+the CTLCOLOR path — verified pixel-identical with and without the theme (EDITs paint `#2D2D30` via the
+fixed brush either way). On builds where the theme DOES bind, `_theme_control` gives native dark
+checkboxes instead; the two paths are mutually benign. STATIC text is not themed (the CTLCOLOR brush
+handles it unconditionally). Separator statics report GetPixel CLR_INVALID on their own DC (a probe
+artifact, not a white fill).
+
+**Extra:** `_frame_dark` now also requests rounded corners (`DWMWA_WINDOW_CORNER_PREFERENCE`=33,
+`DWMWCP_ROUND`=2) and a Mica backdrop (`DWMWA_SYSTEMBACKDROP_TYPE`=38, `DWMSBT_MAINWINDOW`=2); both are
+no-ops on older builds. `C:\Strawberry\perl\bin\perl.exe.manifest` added so perl.exe activates comctl32
+v6 (modern visual styles) for driver demos/tests.
+**Regression tooling kept:** the driver-side `UJI_DEBUG_COLORS=1` pixel ledger (GetPixel on every
+control's own DC) — replaces the screen-capture probes, which ReadBitmap/PrintWindow/EnumWindows
+approaches could not do reliably cross-process.
+**Follow-up candidate:** owner-drawn dark checkboxes/radios. The classic renderer refuses to darken the
+box or recolor its label (CTLCOLORBTN is ignored at the paint level), so the only cross-build way to get
+a truly dark check/radio is `BS_OWNERDRAW` + a `WM_DRAWITEM` path drawing the square/circle, check/glyph,
+and label from the scheme palette (the driver already has `WM_DRAWITEM` plumbing for the owner-drawn
+`color_button`). Push buttons are not in scope (never dark in Win32).
+
+---
+
 ## Post-Spin-Bug Task Queue (user-directed order; already in Widget Set sections above)
 
 Order the user gave — do THESE next, in this order, after the spinner bug is closed:
@@ -654,8 +707,10 @@ correct over both the viewport and its gutter scrollbars. An interactive repro p
 `eg/widget_scroll_view.pl` was not completed before these fixes landed; a live sanity check is
 still recommended to close them out.
 
-- [ ] Standard system font scaling & DPI awareness
-- [ ] Dark Mode auto-detection
+- [x] Standard system font scaling & DPI awareness — DONE (requires no per-call DC changes thanks to
+      per-monitor DPI awareness; see the final Resolved Bug section)
+- [x] Dark Mode auto-detection — DONE (`uses_dark_mode` + frame dark via `_frame_dark`; see the final
+      Resolved Bug section)
 - [x] **Regression:** `min_w`/`min_h`/`max_w`/`max_h` no longer restrict live MOUSE resizing of the window
       **RESOLVED.** Root cause: `update_registry` refreshed the registry record's node but NOT the surface
       record's `node`, while `WM_GETMINMAXINFO` resolves via `$surfaces->{id}{node}` — so constraints added
@@ -803,3 +858,54 @@ viewport (but not the scrollbar) failed the containment test entirely.
 separate `$r2` cast for the scrollbar rect; allow the target even when the cursor is over a
 scrollbar strip that sits outside the viewport (`next unless $in_view || $keyed`). This lets a wheel
 aimed at the vertical/horizontal scrollbar of a scroll_view work too (common UX expectation).
+
+---
+
+## Resolved Bug: window shrink on a runtime min/max constraint did not re-layout the controls inside
+
+**Status: FIXED.** Live repro (`shrink_repro.pl`): after `max_w => 350` the real client shrinks to 350
+but every child stays 868px wide (laid out for the pre-shrink 884) until a manual resize. Full suite
+35 files / 688 tests PASS (new `t/036_constraint_shrink.t`, 10 subtests).
+**Report:** "when a constraint is applied at runtime and it shrinks the window, the layout is not
+recalculated for everything inside the window."
+**Root cause (`lib/Uji/App.pm` `_render`):** the fresh vtree is measured and computed at the adopted OLD
+bounds BEFORE `patch_windows` (the pre-patch `sync_window_bounds` is a no-op: the id isn't registered yet
+— the same adoption that the 800px-default bug introduced). The Reconciler then calls
+`set_prop('max_w', …)`, whose Win32 branch clamps the frame via `_set_window_outer` **synchronously**:
+`WM_SIZE` fires immediately and `_relayout_now` reflows the OLD tree (App's `$vtrees` is still the old
+list mid-patch) at the new size — but the reconciler's child diff afterwards moves the NEW children to the
+stale slot bounds computed before the shrink (e.g. 868px), overriding the correct reflow. Ended up with
+the native window 350px wide and every control still positioned for 884.
+**The fix:** after `patch_windows` returns, re-measure each new vtree with `sync_window_bounds` (the id
+is transferred by then) and, when the REAL client box differs from what the pre-patch compute adopted,
+re-run `compute` + `_move_all` on the whole tree. A normal render (window size unchanged) reads back the
+same bounds and skips the pass, so steady-state renders stay single-pass. This also self-heals any other
+size drift between where the tree was computed and where the OS actually resized the window.
+**Regression test (`t/036_constraint_shrink.t`):** App + headless `MockDriver` round-trip applies
+`max_w => 200` at runtime and asserts the simulated native client, the live window node, and every child
+re-flow to the clamped size (200 → 184 with 8px padding) and that the last `move_widget` for a control
+uses the shrunken width; a follow-up steady-state render keeps the shrunken geometry and re-issues no
+`set_prop`. `MockDriver` gained a `$sim_size` map: `set_prop('min_w'/'max_w'/…)` clamps the simulated
+client rect and fires the resize handler (mirroring the Win32 branch), so the App-level ordering bug
+reproduces headlessly. The test fails against the pre-fix `_render` (window stays at 360).
+
+---
+
+## Resolved: commit "Oops." — DPI/dark-mode half-landed broken code
+
+**Status: FIXED.** The `56a9056` commit added DPI/dark-mode CALL SITES without their implementations, so
+`init` died on the undefined `_enable_dpi_awareness` and no test could run. All methods now exist in
+`lib/Uji/Driver/Win32.pm`; full suite 35 files / 688 tests PASS.
+- `_enable_dpi_awareness`: `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4)`
+  with fallback `SetProcessDPIAware`, called once from `init` (file-scope `$dpi_aware` flag).
+- `_dpi`: `GetDC(0)` + `GetDeviceCaps(LOGPIXELSX = 88)` cached in `$dpi_detect`; a `$dpi` param overrides
+  for tests. `_sx/_sy` logical→physical, `_ux/_uy` physical→logical (identity at 96 DPI); window geometry
+  in the driver is physical, node bounds stay logical.
+- `uses_dark_mode`: registry probe `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize` →
+  `AppsUseLightTheme` via `RegOpenKeyExW`/`RegQueryValueExW`, cached in `$dark_detect`.
+- `_frame_dark`: `DwmSetWindowAttribute($hwnd, 20, BOOL=1, 4)` to paint the caption dark.
+- Also new: `_track_focus` (GetFocus diff → BLUR/FOCUS channel events) + `_id_by_hwnd`, and the
+  `FillRect`/`FrameRect` affixes moved from `gdi32` to `user32` (that is where the exports live), which
+  the colour/button paint paths use.
+- `t/lib/MockDriver` already provided `uses_dark_mode`; added a reader for the resize callback so the
+  simulated constraint-shrink (above) can fire it.

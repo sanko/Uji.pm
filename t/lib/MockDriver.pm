@@ -6,7 +6,7 @@ class MockDriver {
     # Headless stand-in for Uji::Driver::Win32. Records every set_prop/move_widget call and keeps a
     # small "native control state" so we can emulate BM_GETCHECK / BM_SETCHECK round-trips.
     field $channel  : writer(init);
-    field $resize   : writer(set_resize_handler);
+    field $resize   : reader : writer(set_resize_handler);
     field $close_req : writer(set_close_request_handler);
     field $dark      : param = 0;    # simulated colour scheme (0 = light, 1 = dark)
     field $registry : reader = {};    # id => { hwnd => id, node => $node }
@@ -18,31 +18,56 @@ class MockDriver {
     field $vtree;
     field $dialog : writer(retain_dialog) = {};    # { message => result, open => path, save => path, color => hex, prompt => text }
 
+    # Simulated native window client size per window id (the real driver's HWND client rect). Starts
+    # at the mount default (360x400); a set_prop('min_w'/'max_w'...) SHRINKS it live, mirroring the
+    # Win32 branch (clamp -> resize the frame -> fire the resize handler).
+    field $sim_size : reader = {};    # id => { cw => Int, ch => Int }
+    field $win_nodes : reader = {};    # id => window node whose min/max live on the node
+
     #
     method poll_events {1}
     method uses_dark_mode { $dark ? 1 : 0 }
-    method mount   ($t) { $mounted = 1; $vtree = $t; $t->set_bounds( 0, 0, 360, 400 ); $mounts->{ $t->id } = 1; 1 }
-    method unmount ($t) { $unmounts->{ $t->id } = 1; delete $mounts->{ $t->id }; 1 }
+    method mount   ($t) { $mounted = 1; $vtree = $t; $sim_size->{ $t->id } = { cw => 360, ch => 400 }; $win_nodes->{ $t->id } = $t; $t->set_bounds( 0, 0, 360, 400 ); $mounts->{ $t->id } = 1; 1 }
+    method unmount ($t) { $unmounts->{ $t->id } = 1; delete $mounts->{ $t->id }; delete $sim_size->{ $t->id }; delete $win_nodes->{ $t->id }; 1 }
     method mount_children ($t) { $self->_register($t); 1 }
     method _is_mounted { $mounted ? 1 : 0 }
 
     method sync_window_bounds ($t) {
         return 1 unless $mounts->{ $t->id };    # real driver: no surface record for a fresh id
-        $t->set_bounds( 0, 0, 360, 400 );
+        my $s = $sim_size->{ $t->id } || { cw => 360, ch => 400 };
+        $t->set_bounds( 0, 0, $s->{cw}, $s->{ch} );
         1;
     }
     method measure_text ($text) { return ( length( $text // '' ) * 8, 16 ) }
 
     method update_registry ($node) {
         $registry->{ $node->id }{node} = $node if exists $registry->{ $node->id };
+        $win_nodes->{ $node->id } = $node if $node->type eq 'window';
         1;
     }
+
+    method _clamp_v ($v, $min, $max) { $v = $min if $min && $v < $min; $v = $max if $max && $v > $max; $v }
 
     method set_prop ( $vnode_id, $prop, $value ) {
         push @{$calls}, [ 'set_prop', $vnode_id, $prop, $value ];
         my $r = $registry->{$vnode_id} or return 1;
         if ( $prop eq 'checked' ) {
             $checks->{$vnode_id} = $value ? 1 : 0;
+        }
+        elsif ( $prop =~ /^(min|max)_[wh]$/ ) {
+
+            # Mirror the Win32 branch: clamp the native client rect against the window's own
+            # constraints and, when it changes, resize the "frame" live and fire the resize handler
+            # (App's _relayout_now on the CURRENT live tree) exactly as WM_SIZE would.
+            my $w = $win_nodes->{$vnode_id} or return 1;
+            my $s = $sim_size->{$vnode_id}  or return 1;
+            my $cw = $self->_clamp_v( $s->{cw}, $w->min_w, $w->max_w );
+            my $ch = $self->_clamp_v( $s->{ch}, $w->min_h, $w->max_h );
+            return 1 if $cw == $s->{cw} && $ch == $s->{ch};
+            $s->{cw} = $cw;
+            $s->{ch} = $ch;
+            my $rb = $self->resize;
+            $rb->( $vnode_id, $cw, $ch ) if $rb;
         }
         elsif ( $prop eq 'value' && $r->{node}->type eq 'radio_group' ) {
 

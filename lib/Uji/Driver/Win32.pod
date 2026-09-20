@@ -26,10 +26,26 @@ notifications, and applies reconciler updates - all through raw Win32 calls.
 
 =head1 Constructor
 
-=head2 C<new ()>
+=head2 C<new (%opts)>
 
-No parameters. The class is constructed by C<Uji::Driver::detect()>. Internally the constructor registers the FFI
-affixes and calls C<InitCommonControlsEx> so common controls (trackbars) are available.
+Constructed by C<Uji::Driver::detect()> with no options; an explicit driver can pass:
+
+=over 4
+
+=item C<dark_mode =E<gt> 0|1>
+
+Pin the colour scheme: C<1> forces dark, C<0> forces light. The default (C<undef>) probes the OS
+theme (C<HKCU\...\Themes\Personalize\AppsUseLightTheme>) in C<uses_dark_mode>. Pinning skips the
+registry read -- useful for demos (C<eg/widget_dark_mode.pl>) and tests.
+
+=item C<dpi =E<gt> $n>
+
+Explicit DPI override (tests use C<144>); the default probes the display DPI.
+
+=back
+
+Internally the constructor registers the FFI affixes and calls C<InitCommonControlsEx> so common
+controls (trackbars) are available.
 
 =head1 Methods
 
@@ -125,6 +141,24 @@ controls.
 
 Reads the window's client size via C<GetClientRect> and writes it back to the window node's bounds.
 
+=head2 C<_theme_control ( $hwnd )>
+
+In a dark scheme, applies the C<DarkMode_Explorer> uxtheme to a window/control so comctl surfaces
+(scrollbars, combobox popups, trackbars, tabs, tooltips) and the C<BUTTON>/C<EDIT> classes render dark;
+no-op in light mode. On builds where the uxtheme hook-up silently no-ops (the dark "Explorer" theme lacks
+dark button/checkbox/radio parts), the C<BUTTON>/C<EDIT> controls fall through to the C<WM_CTLCOLOR*>
+recolouring instead, so both paths coexist. STATIC text is deliberately left unthemed - its fill already
+comes from the CTLCOLOR brush.
+
+=head2 C<_enable_dark_theme ()>
+
+Best-effort hook-up of Windows' undocumented dark-mode helpers. uxtheme exports them by ordinal only:
+C<135> (C<SetPreferredAppMode>, C<AllowDarkModeForApp> on 1809), C<133> (C<AllowDarkModeForWindow>),
+C<136> (C<FlushMenuThemes>). Resolved at runtime via C<GetProcAddress> and skipped when absent, so the
+driver also runs on builds without them; nothing is called unless C<uses_dark_mode> is true.
+C<AllowDarkModeForWindow> is applied during the top window's C<WM_NCCREATE> (it is ignored after
+creation).
+
 =head1 How it Works
 
 =head3 The Window Procedure
@@ -154,9 +188,13 @@ is re-synced by the driver, and C<on_change> fires with the new value.
 C<lParam> resolves through the registry; when a C<color>/C<background> is set, the driver calls C<SetTextColor>
 (C<color>) and/or C<SetBkColor> + selects a cached brush (C<background>) onto the C<wParam> DC. Never passes through
 C<DefWindowProcW>, which would reset the DC colours the OS already chose; instead it returns a system brush
-(C<COLOR_WINDOW> for edits, C<COLOR_BTNFACE> for statics/buttons) as the default. Note the DC state is restored by
-Windows after the notification, so the colours only show up on the real paint, not on a direct
-C<SendMessageW>+C<GetTextColor> read-back.
+(C<COLOR_WINDOW> for edits, C<COLOR_BTNFACE> for statics/buttons) as the default. The return value is the brush
+I<handle>: the driver returns C<Affix::address($brush)> (an Affix object would numify to its Perl SV address, an
+invalid GDI handle that Windows silently rejects and paints white). Note the DC state is restored by Windows after
+the notification, so the colours only show up on the real paint, not on a direct C<SendMessageW>+C<GetTextColor>
+read-back. Limitation: checkboxes/radios in the classic renderer ignore the returned brush/label colour and paint
+their own white box + black label; on builds where the C<DarkMode_Explorer> uxtheme binds (see C<_theme_control>)
+they go dark natively instead. Push buttons are never dark in the Win32 classic/theme renderers.
 
 =item C<WM_SIZE> - puts a reserved C<RESIZE> message and triggers a synchronous re-layout (so live resizing never
 shows stale layout).

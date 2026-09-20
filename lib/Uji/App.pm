@@ -206,6 +206,23 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
             $self->_move_all( $new_vtree, $driver );
         }
         $reconciler->patch_windows( $vtrees, $new_vtrees, $driver );
+
+        # patch_windows can RESIZE a window live: a min/max constraint applied at runtime pushes the
+        # frame to the clamped size synchronously (set_prop -> _set_window_outer -> WM_SIZE). The
+        # pre-patch compute above had to adopt the OLD bounds because the fresh id was not yet in the
+        # driver's surface map (sync_window_bounds was a no-op), so every slot was laid out at the
+        # pre-resize size -- and the child diff then moved the real controls to those stale slots. Now
+        # that ids are transferred, re-measure each window and re-flow the whole tree when the REAL
+        # client box differs from what we computed. A normal render (no size change) skips this pass.
+        for my $new_vtree (@$new_vtrees) {
+            my $before_w = $new_vtree->bw;
+            my $before_h = $new_vtree->bh;
+            $driver->sync_window_bounds($new_vtree);
+            if ( $new_vtree->bw != $before_w || $new_vtree->bh != $before_h ) {
+                $layout->compute($new_vtree);
+                $self->_move_all( $new_vtree, $driver );
+            }
+        }
         $vtrees = $new_vtrees;
     }
 

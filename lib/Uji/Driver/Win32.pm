@@ -52,13 +52,20 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     # a second prompt_dialog would never see its own prompt_done flag. Unique names keep each
     # driver's windows bound to its own closure.
     my $class_seq = 0;
-    my $dpi_aware = 0;    # once: SetProcessDpiAwarenessContext has run (per process)
+    my $dpi_aware  = 0;              # once: SetProcessDpiAwarenessContext has run (per process)
+    my $dpi_detect = undef;          # lazily-detected display DPI (96 default); undef = not measured yet
+    my $dark_detect = undef;         # lazily-probed Windows colour scheme; undef = not read yet
+    my $dark_theme = 0;              # once: uxtheme dark-mode helpers have been bound (per process)
+    my $set_pref;                    # codepoint: uxtheme SetPreferredAppMode (ordinal 135; AllowDarkModeForApp on 1809)
+    my $allow_dark;                  # codepoint: uxtheme AllowDarkModeForWindow (ordinal 133)
+    my $flush_menu;                  # codepoint: uxtheme FlushMenuThemes (ordinal 136)
     field $win_class      = '';
     field $viewport_class = '';
     field $divider_class  = '';
     field $prompt_class   = '';
     field $canvas_class   = '';
     field $dpi            : param = undef;    # explicit DPI override (tests use dpi => 144); undef = detect
+    field $dark_mode      : param = undef;    # explicit colour-scheme override (1 = dark, 0 = light); undef = probe the OS
 
     # Per-surface registries for the shared-pump multi-window skeleton. Each surface (top-level HWND
     # family) owns a records map so WM_ACTIVATE / WM_CLOSE / tooltips route by surface. Today the only
@@ -100,6 +107,11 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     affix 'user32', 'PeekMessageW',     [ Pointer [Void], Pointer [Void], UInt, UInt, UInt ]         => Int;
     affix 'user32', 'TranslateMessage', [ Pointer [Void] ]                                           => Int;
     affix 'user32', 'DispatchMessageW', [ Pointer [Void] ]                                           => SSize_t;
+    affix 'user32', 'SetProcessDPIAware',             []      => Int;
+    affix 'user32', 'SetProcessDpiAwarenessContext',  [Size_t] => Int;    # DPI_AWARENESS_CONTEXT handle (Win10 1703+)
+affix 'kernel32', 'LoadLibraryW',   [ WString ]                => Pointer [Void];
+affix 'kernel32', 'GetProcAddress', [ Pointer [Void], Size_t ] => Size_t;
+affix 'uxtheme',  'SetWindowTheme', [ Pointer [Void], String, String ] => Int;
     affix 'user32', 'SetTimer',         [ Pointer [Void], Size_t, UInt, Pointer [Void] ]             => Size_t;
     affix 'user32', 'KillTimer',        [ Pointer [Void], Size_t ]                                   => Int;
     affix 'user32', 'UpdateWindow',     [ Pointer [Void] ]                                           => Int;
@@ -232,6 +244,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     affix 'gdi32',  'SelectObject',          [ Pointer [Void], Pointer [Void] ]               => Pointer [Void];
     affix 'gdi32',  'GetTextExtentPoint32W', [ Pointer [Void], WString, Int, Pointer [Void] ] => Int;
     affix 'gdi32',  'GetDeviceCaps',        [ Pointer [Void], Int ]                          => Int;    # LOGPIXELSX = 88
+    affix 'gdi32',  'GetPixel',             [ Pointer [Void], Int, Int ]                     => ULong;
     typedef SIZE => Struct [ cx => Int, cy => Int ];
 
     # Canvas widget paint: BeginPaint/EndPaint (PAINTSTRUCT), and the back-buffer blit.
@@ -264,8 +277,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         rcItem    => RECT(),
         itemData  => SSize_t
     ];
-    affix 'gdi32',  'FillRect',        [ Pointer [Void], Pointer [Void], Pointer [Void] ] => Int;
-    affix 'gdi32',  'FrameRect',       [ Pointer [Void], Pointer [Void], Pointer [Void] ] => Int;
+    affix 'user32', 'FillRect',        [ Pointer [Void], Pointer [Void], Pointer [Void] ] => Int;
+    affix 'user32', 'FrameRect',       [ Pointer [Void], Pointer [Void], Pointer [Void] ] => Int;
     affix 'gdi32',  'CreateSolidBrush', [ Size_t ]                                         => Pointer [Void];
     affix 'gdi32',  'DeleteObject',    [ Pointer [Void] ]                                  => Int;
     affix 'gdi32',  'SetBkMode',       [ Pointer [Void], Int ]                             => Int;
@@ -326,6 +339,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
 
     method init ($app_channel) {
         $self->_enable_dpi_awareness;
+        $self->_enable_dark_theme;
         $channel = $app_channel;
         my $self_ref = $self;
         $wndproc_cb = sub ( $hwnd, $msg, $wparam, $lparam ) {
@@ -335,7 +349,13 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             # exactly like the app window does.
             my ( $ctl, $ret ) = $self_ref->_ctrl_msg( $hwnd, $msg, $wparam, $lparam );
             return $ret if $ctl;
-            if ( $msg == 0x0002 ) {    # WM_DESTROY
+            if ( $msg == 0x0081 ) {    # WM_NCCREATE: AllowDarkModeForWindow only takes effect during creation
+                if ( $allow_dark && $self_ref->uses_dark_mode ) {
+                    $allow_dark->( $hwnd, 1 );
+                }
+                return DefWindowProcW( $hwnd, $msg, $wparam, $lparam );
+            }
+            elsif ( $msg == 0x0002 ) {    # WM_DESTROY
                 my $surface_id = $self_ref->surface_by_hwnd->{$hwnd};
                 if ($surface_id) {
                     delete $self_ref->surfaces->{$surface_id};
@@ -447,7 +467,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $wc->{lpfnWndProc}   = $wndproc_cb;
         $wc->{hInstance}     = undef;
         $wc->{hCursor}       = LoadCursorW( undef, 32512 );
-        $wc->{hbrBackground} = cast( 6, Pointer [Void] );
+        $wc->{hbrBackground} = $self->_scheme_brush( 6, '#202020' );
         $wc->{lpszClassName} = $win_class = 'UjiWindowClass' . ++$class_seq;
         RegisterClassExW($wndclass);
 
@@ -465,7 +485,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $cv->{style}         = 0x0000;
         $cv->{lpfnWndProc}   = $viewport_proc;
         $cv->{hInstance}     = undef;
-        $cv->{hbrBackground} = cast( 16, Pointer [Void] );                            # COLOR_BTNFACE + 1
+        $cv->{hbrBackground} = $self->_scheme_brush( 16, '#2D2D30' );    # COLOR_BTNFACE + 1 / panel in dark
         $cv->{lpszClassName} = $viewport_class = 'UjiViewportClass' . ++$class_seq;
         $cv->{hCursor}       = LoadCursorW( undef, 32512 );
         RegisterClassExW($vclass);
@@ -507,7 +527,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $cd->{style}         = 0x0000;
         $cd->{lpfnWndProc}   = $divider_proc;
         $cd->{hInstance}     = undef;
-        $cd->{hbrBackground} = cast( 18, Pointer [Void] );    # COLOR_BTNSHADOW + 1: a solid grey that reads as a splitter on a white body
+        $cd->{hbrBackground} = $self->_scheme_brush( 18, '#3A3A3A' );    # COLOR_BTNSHADOW + 1: a solid grey splitter on a white body, darker in dark mode
         $cd->{lpszClassName} = $divider_class = 'UjiDividerClass' . ++$class_seq;
         $cd->{hCursor}       = LoadCursorW( undef, 32512 );
         RegisterClassExW($dclass);
@@ -549,7 +569,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $cp->{style}         = 0x0000;
         $cp->{lpfnWndProc}   = $prompt_proc;
         $cp->{hInstance}     = undef;
-        $cp->{hbrBackground} = cast( 0, Pointer [Void] );                         # COLOR_WINDOW: white body
+        $cp->{hbrBackground} = $self->_scheme_brush( 0, '#202020' );     # COLOR_WINDOW: white dialogue body, dark in dark mode
         $cp->{lpszClassName} = $prompt_class = 'UjiPromptClass' . ++$class_seq;
         $cp->{hCursor}       = LoadCursorW( undef, 32512 );
         RegisterClassExW($pclass);
@@ -576,7 +596,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $cc->{lpfnWndProc}   = $canvas_proc;
         $cc->{hInstance}     = undef;
         $cc->{hCursor}       = LoadCursorW( undef, 32512 );
-        $cc->{hbrBackground} = cast( 15 + 1, Pointer [Void] );    # COLOR_BTNFACE + 1
+        $cc->{hbrBackground} = $self->_scheme_brush( 15 + 1, '#2D2D30' );    # COLOR_BTNFACE + 1 / panel in dark
         $cc->{lpszClassName} = $canvas_class = 'UjiCanvasClass' . ++$class_seq;
         RegisterClassExW($cclass);
         free($cclass);
@@ -803,11 +823,13 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             return ( 0, undef );
         }
 
-        # WM_CTLCOLORSTATIC (0x0138) / WM_CTLCOLOREDIT (0x0133) / WM_CTLCOLORBTN (0x0135):
-        # Return a brush + set text/background colours for the child control. We must NOT
-        # fall through to DefWindowProc here: DefWindowProc restores the DC's text/background
-        # colours to system defaults, silently discarding our SetTextColor/SetBkColor.
-        elsif ( $msg == 0x0138 || $msg == 0x0133 || $msg == 0x0135 ) {
+        # WM_CTLCOLORSTATIC (0x0138) / WM_CTLCOLOREDIT (0x0133) / WM_CTLCOLORBTN (0x0135) /
+        # WM_CTLCOLORLISTBOX (0x0134): Return a brush + set text/background colours for the child
+        # control. We must NOT fall through to DefWindowProc here: DefWindowProc restores the DC's
+        # text/background colours to system defaults, silently discarding our SetTextColor/
+        # SetBkColor. In a dark scheme the defaults flip too: light text on a dark fill, so a
+        # window that forces/auto-detects dark is dark everywhere, not just the frame.
+        elsif ( $msg == 0x0138 || $msg == 0x0133 || $msg == 0x0135 || $msg == 0x0134 ) {
             my $child_hwnd = $lparam;
             my $record     = $self->_get_registry_by_hwnd($child_hwnd);
             if ( $record && $record->{node} ) {
@@ -816,16 +838,32 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 if ( $node->color ) {
                     SetTextColor( $hdc, $self->_parse_color( $node->color ) );
                 }
+                elsif ( $self->uses_dark_mode ) {
+                    SetTextColor( $hdc, 0x00E6E6E6 );    # light text on the dark fills below
+                }
                 if ( $node->background ) {
                     SetBkColor( $hdc, $self->_parse_color( $node->background ) );
-                    return ( 1, $self->_get_brush( $node->background ) );
+
+                    # WNDPROC return values are raw LRESULTs: the HBRUSH must be a plain integer
+                    # handle, NOT an Affix pointer object (numifying that yields the Perl SV's
+                    # address, which Windows rejects as an invalid brush and falls back to white).
+                    my $brush = $self->_ctl_brush( $node->background );
+                    return ( 1, $brush ? Affix::address($brush) : 0 );
                 }
             }
 
-            # No explicit background: return the same system brush DefWindowProc would
-            # (COLOR_WINDOW for edits, COLOR_BTNFACE for statics/buttons) without touching
-            # the DC, so the SetTextColor above is preserved.
-            return ( 1, GetSysColorBrush( $msg == 0x0133 ? 5 : 15 ) );    # COLOR_WINDOW / COLOR_BTNFACE
+            # Dark scheme defaults: edits/listboxes get the raised panel so a text box reads as a
+            # box, statics/buttons blend with the window body. Light mode keeps the classic system
+            # brushes (COLOR_WINDOW for edits and listboxes, COLOR_BTNFACE for statics/buttons)
+            # and does not touch the DC, so existing apps are unchanged.
+            if ( $self->uses_dark_mode ) {
+                my $fill = ( $msg == 0x0133 || $msg == 0x0134 ) ? '#2D2D30' : '#202020';
+                SetBkColor( $wparam, $self->_parse_color($fill) );
+                my $brush = $self->_ctl_brush($fill);
+                return ( 1, $brush ? Affix::address($brush) : 0 );
+            }
+            my $sys_brush = GetSysColorBrush( $msg == 0x0133 || $msg == 0x0134 ? 5 : 15 );    # COLOR_WINDOW / COLOR_BTNFACE
+            return ( 1, $sys_brush ? Affix::address($sys_brush) : 0 );
         }
         elsif ( $msg == 0x004E ) {                                        # WM_NOTIFY (tab control sends TCN_SELCHANGE to its parent)
             return ( 0, undef ) unless $lparam;
@@ -1013,6 +1051,15 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         return ( ( $rgb & 0xFF ) << 16 ) | ( $rgb & 0x00FF00 ) | ( ( $rgb >> 16 ) & 0xFF );
     }
 
+    # A class background brush for a surface with no per-node colour: the classic system brush
+    # (given by $sys_index) in light mode, and a solid dark fill when the scheme is dark -- so a
+    # window that forces/auto-detects dark is dark everywhere (frame, body, viewports, dialogs),
+    # with no light gaps behind the controls.
+    method _scheme_brush ( $sys_index, $dark_hex ) {
+        return cast( $sys_index, Pointer [Void] ) unless $self->uses_dark_mode;
+        return $self->_get_brush($dark_hex);
+    }
+
     # Lazily create and cache a solid brush for a '#RRGGBB' colour string.
     method _get_brush ($hex) {
         return undef unless defined $hex;
@@ -1020,6 +1067,13 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $brush = CreateSolidBrush( $self->_parse_color($hex) );
         $brush_cache->{$hex} = $brush if $brush;
         return $brush;
+    }
+
+    # CTLCOLOR brush for a fill colour; this indirection is where the raw-handle extraction
+    # (Affix::address) happens at the call sites, kept in one place so every caller returns a
+    # scalar handle safe to hand back as a WNDPROC LRESULT.
+    method _ctl_brush ($hex) {
+        return $self->_get_brush($hex);
     }
 
     # Lazily create and cache an HFONT for a given face name and point size. Uses the same
@@ -1278,6 +1332,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             undef, 0, undef, undef
         );
         $self->_frame_dark($hwnd) if $self->uses_dark_mode;
+        $self->_theme_control($hwnd);
         $registry->{ $vtree->id } = { hwnd => $hwnd, node => $vtree, surface => $surface_id };
         $surfaces->{$surface_id}  = { hwnd => $hwnd, node => $vtree, records => {} };
         $surface_by_hwnd->{$hwnd} = $surface_id;
@@ -1306,6 +1361,30 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $show_style = $vtree->maximized && !$self->_has_size_constraints($vtree) ? 3 : $vtree->minimized ? 2 : 5;
         ShowWindow( $hwnd, $show_style );
         UpdateWindow($hwnd);
+    }
+
+    # Env-gated colour audit used while developing dark mode: samples a few fixed offset pixels in
+    # each control's own DC and prints them with the node id/type so a screen map can be rebuilt
+    # from ground truth without capturing the screen.
+    method _debug_dump_colors ($root_hwnd) {
+        for my $id ( sort { ( $registry->{$a}{order} // 0 ) <=> ( $registry->{$b}{order} // 0 ) } keys %$registry ) {
+            my $rec = $registry->{$id} or next;
+            my $h   = $rec->{hwnd}     or next;    # containers and surfaces without a HWND
+            next if $h == $root_hwnd;              # skip the root window itself
+            my $n = $rec->{node} or next;
+            my $buf = malloc(128 * 2);
+            my $cl  = GetClassNameW( $h, $buf, 128 );
+            my $cls = $cl > 0 ? decode( 'UTF-16LE', Affix::raw( $buf, $cl * 2 ) ) : '?';
+            free($buf);
+            my $dc = GetDC($h) or next;
+            my @px;
+            for my $pt ( [ 2, 2 ], [ 3, 3 ], [ 12, 6 ], [ 30, 12 ] ) {
+                push @px, sprintf( '#%06X', GetPixel( $dc, $pt->[0], $pt->[1] ) );
+            }
+            ReleaseDC( $h, $dc );
+            printf STDERR "COLOR %-16s id=%-10s cls=%-10s px=[%s %s %s %s]\n",
+                $n->type // '', $id, $cls, @px;
+        }
     }
 
     method unmount ($vtree) {
@@ -1383,6 +1462,143 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         free($rect_ptr);
     }
 
+    # ── DPI awareness + dark mode ─────────────────────────────────────────────────────────────────
+    # Logical vs physical pixels: layout, window w/h and node boxes live in LOGICAL pixels; native
+    # Win32 windows/rects/coordinates are PHYSICAL pixels. At 96 DPI (and in every synthetic test)
+    # the two are identical so _sx/_ux are identity; on a scaled display the driver converts at
+    # every seam (CreateWindowExW, GetClientRect, WM_SIZE lParam, AdjustWindowRectEx, SetWindowPos).
+    # SetProcessDpiAwarenessContext must run ONCE per process before any DC/DPI query; the OS
+    # ignores repeats and later drivers no-op via $dpi_aware.
+    method _enable_dpi_awareness () {
+        return if $dpi_aware;
+        $dpi_aware = 1;
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4 (user32, Win10 1703+); fall back to the
+        # legacy System-DPI-aware SetProcessDPIAware on older systems.
+        if ( defined &SetProcessDpiAwarenessContext ) {
+            return if SetProcessDpiAwarenessContext(-4) != 0;
+        }
+        SetProcessDPIAware();
+        return;
+    }
+
+    # Ask uxtheme to render a control in the dark "Explorer" theme. Applied to the comctl classes
+    # below plus BUTTON/EDIT per the demo requirements: on builds where DarkMode_Explorer actually
+    # binds, checkboxes/radios/push buttons and edit boxes render dark natively. On builds where it
+    # silently no-ops (this machine: SetWindowTheme+AllowDarkModeForWindow leave the control classic),
+    # BUTTON/EDIT keep falling through to our WM_CTLCOLOR* path, so the dark fills and any node
+    # color/background still apply -- the two paths are mutually benign. Not applied to STATIC text:
+    # the CTLCOLOR brush recolours it unconditionally and theming it gains nothing.
+    my @theme_classes = qw[
+        SCROLLBAR
+        SysTabControl32
+        COMBOBOX
+        BUTTON
+        EDIT
+        msctls_trackbar32
+        msctls_updown32
+        msctls_progress32
+        ToolbarWindow32
+        msctls_statusbar32
+        tooltips_class32
+    ];
+    method _theme_control ($hwnd) {
+        return unless $hwnd && $self->uses_dark_mode;
+        my $buf = malloc( 128 * 2 );
+        my $n   = GetClassNameW( $hwnd, $buf, 128 );
+        my $cls = $n > 0 ? decode( 'UTF-16LE', Affix::raw( $buf, $n * 2 ) ) : '';
+        free($buf);
+        return unless grep { $_ eq $cls } @theme_classes;
+        SetWindowTheme( $hwnd, 'DarkMode_Explorer', undef );
+        return;
+    }
+
+    # Best-effort, process-wide hook-up of Windows' (undocumented) dark-mode helpers. uxtheme
+    # exports these by ORDINAL only -- 135 SetPreferredAppMode (that ordinal is AllowDarkModeForApp
+    # on 1809), 133 AllowDarkModeForWindow, 136 FlushMenuThemes -- so resolve at runtime and skip
+    # any build where the ordinal is absent. Setting AllowDark lets comctl controls be themed (see
+    # _theme_control) and FlushMenuThemes recolours any classic title menus.
+    method _enable_dark_theme () {
+        return unless $self->uses_dark_mode;
+        return if $dark_theme;
+        $dark_theme = 1;
+        my $theme_dll = LoadLibraryW('uxtheme');
+        return unless $theme_dll;
+        my $pref  = GetProcAddress( $theme_dll, 135 );
+        my $allow = GetProcAddress( $theme_dll, 133 );
+        my $flush = GetProcAddress( $theme_dll, 136 );
+        if ($pref) {
+            affix undef, [ $pref  => 'ujidark_set_pref' ], [ Int ]      => Int;
+            $set_pref = \&ujidark_set_pref;
+        }
+        if ($allow) {
+            affix undef, [ $allow => 'ujidark_allow_win' ], [ Int, Int ] => Int;
+            $allow_dark = \&ujidark_allow_win;
+        }
+        if ($flush) {
+            affix undef, [ $flush => 'ujidark_flush_menu' ], []          => Void;
+            $flush_menu = \&ujidark_flush_menu;
+        }
+        $set_pref->(1)    if $set_pref;     # PreferredAppMode::AllowDark (1809: AllowDarkModeForApp(TRUE))
+        $flush_menu->()   if $flush_menu;   # repaint any classic title menus in the new scheme
+        return;
+    }
+
+    # The display DPI, or the explicit override field ($dpi, tests use 144). Detected once and
+    # cached: this is read on every _sx/_ux/_uy seam, and each read binds GetDC/GetDeviceCaps.
+    method _dpi () {
+        return $dpi if defined $dpi;                 # explicit override (tests: dpi => 144)
+        return $dpi_detect if defined $dpi_detect;
+        my $dc   = GetDC(0);
+        my $logp = $dc ? GetDeviceCaps( $dc, 88 ) : 96;    # LOGPIXELSX
+        ReleaseDC( 0, $dc ) if $dc;
+        return $dpi_detect = $logp || 96;
+    }
+
+    method _sx ($v) { return int( $v * $self->_dpi / 96 + 0.5 ) }    # logical -> physical
+    method _sy ($v) { return int( $v * $self->_dpi / 96 + 0.5 ) }
+    method _ux ($v) { return int( $v * 96 / $self->_dpi + 0.5 ) }    # physical -> logical
+    method _uy ($v) { return int( $v * 96 / $self->_dpi + 0.5 ) }
+
+    # Follow the user's Windows colour scheme: HKCU\Software\Microsoft\Windows\CurrentVersion\
+    # Themes\Personalize -> AppsUseLightTheme (REG_DWORD). Dark when the flag is off/missing.
+    method uses_dark_mode () {
+        return $dark_mode if defined $dark_mode;    # forced via dark_mode => 0|1 (demos/tests)
+        return $dark_detect if defined $dark_detect;
+        my $kptr = malloc(8);                           # HKEY handle (Size_t)
+        my $ret  = RegOpenKeyExW(
+            0x80000001,                                 # HKEY_CURRENT_USER
+            'Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize',
+            0, 0x20019,                                 # ulOptions=0, KEY_READ
+            $kptr,
+        );
+        return $dark_detect = 0 if $ret != 0;           # no theme key -> light
+        my $hkey = unpack( 'Q<', Affix::raw( $kptr, 8 ) );
+        free($kptr);
+        my $vptr = malloc( sizeof( DWORDV() ) );
+        my $lptr = malloc(4);
+        memcpy( $lptr, pack( 'l<', 4 ), 4 );            # cbData = 4 (one DWORD)
+        my $q = RegQueryValueExW( $hkey, 'AppsUseLightTheme', undef, undef, $vptr, $lptr );
+        RegCloseKey($hkey);
+        my $light = $q == 0 ? unpack( 'L<', Affix::raw( $vptr, 4 ) ) : 1;
+        free($vptr);
+        free($lptr);
+        return $dark_detect = ( $light == 1 ? 0 : 1 );
+    }
+
+    # Paint the window chrome for immersive dark mode plus Windows 11 window features. Attribute
+    # 20 = DWMWA_USE_IMMERSIVE_DARK_MODE (BOOL in a 4-byte buffer), 33 = DWMWA_WINDOW_CORNER_PREFERENCE
+    # (DWMWCP_ROUND = 2), 38 = DWMWA_SYSTEMBACKDROP_TYPE (DWMSBT_MAINWINDOW = 2, Windows 11 Mica).
+    # The 33/38 attributes are harmless no-ops on older builds where DWM ignores them.
+    method _frame_dark ($hwnd) {
+        my $val   = pack( 'l<', 1 );    # BOOL TRUE
+        my $round = pack( 'l<', 2 );    # DWMWCP_ROUND
+        my $mica  = pack( 'l<', 2 );    # DWMSBT_MAINWINDOW
+        DwmSetWindowAttribute( $hwnd, 20, $val, 4 );
+        DwmSetWindowAttribute( $hwnd, 33, $round, 4 );
+        DwmSetWindowAttribute( $hwnd, 38, $mica, 4 );
+        return;
+    }
+
     # Lazily create the shared tooltip control (created once, owned by the main window).
     method _ensure_tooltip () {
         return $tooltip_hwnd if $tooltip_hwnd;
@@ -1393,6 +1609,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             # WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX
             0x80000003, 0, 0, 0, 0, $main_hwnd, 0, undef, undef
         );
+        $self->_theme_control($tooltip_hwnd);
         return $tooltip_hwnd;
     }
 
@@ -1429,6 +1646,16 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $surface = $surfaces->{ $vtree->id };
         my $hwnd    = $surface ? $surface->{hwnd} : undef;
         $self->_mount_node( $vtree->child, $hwnd ) if $vtree->child && $hwnd;
+
+        # One-shot, env-gated pixel audit (UJI_DEBUG_COLORS=1): reads each mounted control back from
+        # its OWN device context, so control colours are verified in-process without any screen
+        # capture, z-order or DPI dependencies. Pause briefly first so placeholders/checkmarks that
+        # draw on their first real paint cycle are present.
+        if ( $ENV{UJI_DEBUG_COLORS} ) {
+            select( undef, undef, undef, 0.4 );
+            UpdateWindow($hwnd) if $hwnd;
+            $self->_debug_dump_colors($hwnd);
+        }
     }
 
     method _get_client_size ($hwnd) {
@@ -1485,6 +1712,45 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $self->_repaint_active_spin_arrows;
         $self->_sync_column_orders;
         $self->_track_focus;
+    }
+
+    # Focus/blur subscription transport: watch GetFocus() across poll ticks and emit FOCUS/BLUR
+    # events whenever the focused control (or the top-level window itself) changes. The App
+    # translates these into sub_on_focus / sub_on_blur messages; an id-scoped subscription filters
+    # on the carried focus_id / blur_id (the registry id of the control that gained/lost focus).
+    method _track_focus () {
+        my $focused = GetFocus() // 0;    # 0 / NULL when nothing has focus
+        return if $focus_last == $focused;
+        my $prev = $focus_last;
+        $focus_last = $focused;
+        if ($prev) {
+            if ( my $prev_id = $self->_id_by_hwnd($prev) ) {
+                $channel->put( { type => 'BLUR', blur_id => $prev_id } );
+            }
+        }
+        if ($focused) {
+            if ( my $id = $self->_id_by_hwnd($focused) ) {
+                $channel->put( { type => 'FOCUS', focus_id => $id } );
+            }
+        }
+        return;
+    }
+
+    # Map a native HWND back to a node id: child controls live in the registry (their id), the
+    # window HWNDs in surface_by_hwnd (the surface id). Spin-box buddies (aux) resolve to their
+    # owning node too, so focus on the up/down arrows reports the spin_box.
+    method _id_by_hwnd ($hwnd) {
+        return unless $hwnd;
+        for my $id ( keys %$registry ) {
+            my $rec = $registry->{$id} or next;
+            next unless defined $rec->{hwnd};
+            return $id if $rec->{hwnd} == $hwnd;
+            return $id if defined $rec->{aux} && $rec->{aux} == $hwnd;
+        }
+        for my $surface_hwnd ( keys %$surface_by_hwnd ) {
+            return $surface_by_hwnd->{$surface_hwnd} if $surface_hwnd == $hwnd;
+        }
+        return undef;
     }
 
     method _mount_node ( $vnode, $parent_hwnd ) {
@@ -1687,6 +1953,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 0x54010000, $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef, undef
             );
             $registry->{ $vnode->id } = { hwnd => $hw, node => $vnode, parent_hwnd => $parent_hwnd, surface => 'main', index => $vnode->index // 0, };
+            $self->_theme_control($hw);
             $self->_populate_tabs( $vnode->id );
 
             # Panel CONTENTS mount as SIBLINGS of the host window (group-box style), laid out into
@@ -1772,6 +2039,11 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $style, $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $cid, undef, undef );
         $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode, parent_hwnd => $parent_hwnd, surface => 'main', cid => $cid };
         $surface_by_hwnd->{$hwnd} = 'main';    # reverse map: HWND -> surface_id (each control HWND belongs to the main surface today)
+        $self->_theme_control($hwnd);
+        if ( $ENV{UJI_DEBUG_LAYOUT} ) {
+            printf STDERR "UJI LAYOUT %-18s id=%-12s box=%d,%d %dx%d hwnd=%d parent=%s\n",
+                $class, $vnode->id, $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $hwnd, $parent_hwnd ? "0x" . sprintf( '%x', $parent_hwnd ) : '-';
+        }
 
         # Apply initial state for props that aren't baked into styles.
         EnableWindow( $hwnd, $vnode->enabled ? 1 : 0 );
@@ -1971,6 +2243,7 @@ if ( $vnode->type eq 'spinner' ) {
         ShowWindow( $up, $vnode->visible   ? 5 : 0 );
         return unless $up;
         $registry->{ $vnode->id }{aux} = $up;
+        $self->_theme_control($up);
         SendMessageW( $up, 0x046F, 0, ( $vnode->max << 16 ) | $vnode->min );    # UDM_SETRANGE32
         SendMessageW( $up, 0x0471, 0, $vnode->value );                          # UDM_SETPOS32
         $self->_spin_set_step( $up, $vnode->step ) if $vnode->step != 1;
@@ -2000,6 +2273,7 @@ if ( $vnode->type eq 'spinner' ) {
                 );
                 if ($ih) {
                     SendMessageW( $ih, 0x0170, $hicon, 0 );    # STM_SETICON
+                    $self->_theme_control($ih);
                     $rec->{icon_hwnd} = $ih;
                 }
             }
@@ -2015,6 +2289,7 @@ if ( $vnode->type eq 'spinner' ) {
         return unless $clear;
         EnableWindow( $clear, $vnode->enabled ? 1 : 0 );
         ShowWindow( $clear, $vnode->value ? 5 : 0 );
+        $self->_theme_control($clear);
         $rec->{aux}             = $clear;
         $rec->{search_clear_id} = $cmd;
         $registry->{$cmd} = { hwnd => $clear, node => $vnode, search_clear => 1, search_id => $vnode->id, };
@@ -2588,7 +2863,9 @@ SendMessageW( $record->{hwnd}, 0x0172, 0, $hb ) if $hb;    # STM_SETIMAGE (IMAGE
     }
 
     method _create_scrollbar ( $parent, $vertical ) {
-        return CreateWindowExW( 0, 'SCROLLBAR', undef, 0x54000000 | ( $vertical ? 0x0001 : 0x0000 ), 0, 0, 0, 0, $parent, 0, undef, undef );
+        my $sb = CreateWindowExW( 0, 'SCROLLBAR', undef, 0x54000000 | ( $vertical ? 0x0001 : 0x0000 ), 0, 0, 0, 0, $parent, 0, undef, undef );
+        $self->_theme_control($sb);
+        return $sb;
     }
 
     # SBM_* window messages are unreliable for the control on modern Windows, so the driver
@@ -2899,6 +3176,7 @@ SendMessageW( $record->{hwnd}, 0x0172, 0, $hb ) if $hb;    # STM_SETIMAGE (IMAGE
         $rec->{aux} ||= CreateWindowExW( 0, $divider_class, undef, 0x54000000, 0, 0, $dw, $dw, $rec->{parent_hwnd}, 0, undef, undef );
         my $hw = $rec->{aux};
         return unless $hw;
+        $self->_theme_control($hw);
         if ($vert) {
             SetWindowPos( $hw, undef, $node->bx // 0, ( $node->by // 0 ) + $div, $node->bw // 0, $dw, 0x0004 );
         }
@@ -4143,10 +4421,15 @@ SendMessageW( $record->{hwnd}, 0x0172, 0, $hb ) if $hb;    # STM_SETIMAGE (IMAGE
         my $dlg = CreateWindowExW( 0, $prompt_class, $self->_nz( $o{title} // 'Prompt' ), 0x80C00000, 200, 200, 380, 160, $owner, 0, 0, 0 );
         return undef unless $dlg;
         $prompt_hwnd = $dlg;
-        CreateWindowExW( 0, 'STATIC', $self->_nz( $o{message} // '' ), 0x50000000, 14, 10, 340, 40, $dlg, 0, 0, 0 );
+        $self->_theme_control($dlg);
+        my $msg_text = CreateWindowExW( 0, 'STATIC', $self->_nz( $o{message} // '' ), 0x50000000, 14, 10, 340, 40, $dlg, 0, 0, 0 );
+        $self->_theme_control($msg_text);
         my $yes = CreateWindowExW( 0, 'EDIT', $self->_nz( $o{default} // '' ), 0x50810080, 14, 60, 340, 24, $dlg, 0, 0, 0 );
-        CreateWindowExW( 0, 'BUTTON', 'OK',     0x50000000, 240, 100, 60, 26, $dlg, 1, 0, 0 );
-        CreateWindowExW( 0, 'BUTTON', 'Cancel', 0x50000000, 306, 100, 60, 26, $dlg, 2, 0, 0 );
+        $self->_theme_control($yes);
+        my $ok = CreateWindowExW( 0, 'BUTTON', 'OK',     0x50000000, 240, 100, 60, 26, $dlg, 1, 0, 0 );
+        my $cancel = CreateWindowExW( 0, 'BUTTON', 'Cancel', 0x50000000, 306, 100, 60, 26, $dlg, 2, 0, 0 );
+        $self->_theme_control($ok);
+        $self->_theme_control($cancel);
         $prompt_edit = $yes;
         ShowWindow( $dlg, 5 );    # SW_SHOW
         SetFocus($prompt_edit);
