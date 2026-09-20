@@ -69,9 +69,15 @@ is Uji::Driver::Win32::SendMessageW( $bar_r->{hwnd}, 0x0408, 0, 0 ), 40, 'progre
 $drv->set_prop( $bar->id, 'value', 75 );
 is Uji::Driver::Win32::SendMessageW( $bar_r->{hwnd}, 0x0408, 0, 0 ), 75, 'set_prop moves the progress bar';
 
-# Toggle switch / toggle button (BM_GETCHECK round-trip through BN_CLICKED)
-is Uji::Driver::Win32::SendMessageW( $sw_r->{hwnd}, 0x00F0, 0, 0 ), 0, 'toggle switch starts unchecked';
-is Uji::Driver::Win32::SendMessageW( $tb_r->{hwnd}, 0x00F0, 0, 0 ), 1, 'toggle button starts checked';
+# Toggle switch / toggle button (state round-trip through BN_CLICKED). State source depends on the
+# scheme: light uses the native check state (BM_GETCHECK); a dark owner-draw toggle has no native state,
+# so the driver mirrors it in the registry record.
+my $getcheck = sub ($r) {
+    $drv->uses_dark_mode ? ( $r->{check} // 0 )
+    : Uji::Driver::Win32::SendMessageW( $r->{hwnd}, 0x00F0, 0, 0 );    # BM_GETCHECK
+};
+is $getcheck->($sw_r), 0, 'toggle switch starts unchecked';
+is $getcheck->($tb_r), 1, 'toggle button starts checked';
 $chan->get() while $chan->size;
 
 # The native button would have toggled itself in a real click; simulate that then tap BN_CLICKED.
@@ -91,7 +97,7 @@ is $msg3 && $msg3->{value}, 0,             'toggle button reports the checked st
 
 # set_prop('checked') round-trips for toggle widgets.
 $drv->set_prop( $sw->id, 'checked', 0 );
-is Uji::Driver::Win32::SendMessageW( $sw_r->{hwnd}, 0x00F0, 0, 0 ), 0, 'set_prop unchecked the toggle switch';
+is $getcheck->($sw_r), 0, 'set_prop unchecked the toggle switch';
 
 # Link button: static hashref message on BN_CLICKED
 $chan->get() while $chan->size;

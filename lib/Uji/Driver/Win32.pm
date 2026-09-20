@@ -265,14 +265,16 @@ affix 'uxtheme',  'SetWindowTheme', [ Pointer [Void], String, String ] => Int;
     # Colour-button owner draw: WM_DRAWITEM delivers a DRAWITEMSTRUCT to the OWNER window; the
     # button control itself is mounted with BS_OWNERDRAW and we paint swatch + hex text there.
     # Offsets: ct/CtlType..CtlID (5 uints), pad->4-byte-ptr alignment, hwndItem, hDC, rcItem,
-    # itemData (control id). 64 bytes total.
+    # itemData (control id). 64 bytes total. hwndItem is typed Size_t (NOT Pointer [Void]): the
+    # owner-draw routing compares it against registry HWNDs, and an opaque Pointer field would come
+    # back as an Affix REF whose numification is the SV's address, never matching an HWND.
     typedef DRAWITEMSTRUCT => Struct [
         ctlType   => UInt,
         ctlID     => UInt,
         itemID    => UInt,
         itemAction => UInt,
         itemState => UInt,
-        hwndItem  => Pointer [Void],
+        hwndItem  => Size_t,
         hDC       => Pointer [Void],
         rcItem    => RECT(),
         itemData  => SSize_t
@@ -284,6 +286,10 @@ affix 'uxtheme',  'SetWindowTheme', [ Pointer [Void], String, String ] => Int;
     affix 'gdi32',  'SetBkMode',       [ Pointer [Void], Int ]                             => Int;
     affix 'user32', 'DrawTextW',       [ Pointer [Void], WString, Int, Pointer [Void], UInt ] => Int;
     affix 'user32', 'DrawFocusRect',   [ Pointer [Void], Pointer [Void] ]                  => Int;
+    affix 'gdi32',  'CreatePen',        [ Int, Int, ULong ]                                 => Pointer [Void];
+    affix 'gdi32',  'MoveToEx',         [ Pointer [Void], Int, Int, Pointer [Void] ]       => Int;
+    affix 'gdi32',  'LineTo',           [ Pointer [Void], Int, Int ]                       => Int;
+    affix 'gdi32',  'Ellipse',          [ Pointer [Void], Int, Int, Int, Int ]             => Int;
 
     # Common controls (trackbar/slider, up/down spinner, progress bar, etc.)
     typedef INITCOMMONCONTROLSEX => Struct [ dwSize => ULong, dwICC => ULong ];
@@ -621,13 +627,20 @@ affix 'uxtheme',  'SetWindowTheme', [ Pointer [Void], String, String ] => Int;
                 return ( 1, 0 );
             }
         }
-        if ( $msg == 0x002B ) {    # WM_DRAWITEM -> owner-drawn control (color button) needs a repaint
+        if ( $msg == 0x002B ) {    # WM_DRAWITEM -> owner-drawn control (color button / dark check) needs a repaint
             my $dis = cast( $lparam, DRAWITEMSTRUCT() );
             if ($dis) {
                 my $record = $self->_get_registry_by_hwnd( $dis->{hwndItem} );
-                if ( $record && $record->{node} && $record->{node}->type eq 'color_button' ) {
-                    $self->_draw_color_button( $record->{node}, $dis, $record );
-                    return ( 1, 1 );
+                if ( $record && $record->{node} ) {
+                    my $t = $record->{node}->type;
+                    if ( $t eq 'color_button' ) {
+                        $self->_draw_color_button( $record->{node}, $dis, $record );
+                        return ( 1, 1 );
+                    }
+                    if ( $t eq 'checkbox' || $t eq 'radio' || $t eq 'toggle_switch' || $t eq 'toggle_button' ) {
+                        $self->_draw_check_button( $record->{node}, $dis, $record );
+                        return ( 1, 1 );
+                    }
                 }
             }
         }
@@ -710,6 +723,19 @@ affix 'uxtheme',  'SetWindowTheme', [ Pointer [Void], String, String ] => Int;
                     return ( 1, 0 );
                 }
 
+                # BN_CLICKED (0) -> Dark owner-drawn radio: move the whole group's selection flags
+                # (native radios auto-synchronise via WS_GROUP, but the owner-drawn type has no native
+                # state at all). The on_select dispatch below still fires with this radio's value.
+                if ( $notify_code == 0 && $node->type eq 'radio' && $self->uses_dark_mode ) {
+                    if ( my $grp = $self->_radio_group_for($record) ) {
+                        $self->_apply_radio_group( $grp, $node->value );
+                    }
+                    else {
+                        $record->{check} = 1;
+                        InvalidateRect( $record->{hwnd}, undef, 1 );
+                    }
+                }
+
                 # BN_CLICKED (0) -> Button click. on_click is dispatched: a static message
                 # hashref is put verbatim; a callback is invoked and its return value is put.
                 if ( $notify_code == 0 && $node->can('on_click') && $node->on_click ) {
@@ -718,11 +744,27 @@ affix 'uxtheme',  'SetWindowTheme', [ Pointer [Void], String, String ] => Int;
                     $self->channel->put($action) if $action;
                 }
 
-                # BN_CLICKED (0) -> Checkbox toggle: read the actual state back from the control
-                elsif ( $notify_code == 0 && $node->can('on_toggle') && $node->on_toggle ) {
-                    my $checked    = SendMessageW( $record->{hwnd}, 0x00F0, 0, 0 );    # BM_GETCHECK
-                    my $action_msg = $node->on_toggle->( $checked ? 1 : 0 );
-                    $self->channel->put($action_msg) if $action_msg;
+                # BN_CLICKED (0) -> Checkbox / toggle switch / toggle button click. Dark owner-drawn
+                # checks have no native state, so the registry flag is toggled here; light native
+                # checks already toggled themselves (BM_CLICK) and the state is read back. The
+                # on_toggle callback is optional: the mark must still move without one.
+                elsif ( $notify_code == 0
+                    && (   $node->type eq 'checkbox'
+                        || $node->type eq 'toggle_switch'
+                        || $node->type eq 'toggle_button' ) ) {
+                    my $checked;
+                    if ( defined $record->{check} ) {
+                        $record->{check} = $record->{check} ? 0 : 1;
+                        $checked         = $record->{check};
+                        InvalidateRect( $record->{hwnd}, undef, 1 ) if $self->uses_dark_mode;
+                    }
+                    else {
+                        $checked = ( SendMessageW( $record->{hwnd}, 0x00F0, 0, 0 ) // 0 ) ? 1 : 0;    # BM_GETCHECK
+                    }
+                    if ( $node->on_toggle ) {
+                        my $action_msg = $node->on_toggle->( $checked ? 1 : 0 );
+                        $self->channel->put($action_msg) if $action_msg;
+                    }
                 }
 
                 # BN_CLICKED (0) -> Radio select: dispatch the clicked option's value
@@ -1173,6 +1215,128 @@ affix 'uxtheme',  'SetWindowTheme', [ Pointer [Void], String, String ] => Int;
             ( $fr->{left}, $fr->{top}, $fr->{right}, $fr->{bottom} ) = ( $r->{left}, $r->{top}, $r->{right}, $r->{bottom} );
             DrawFocusRect( $hdc, $fp );
             free($fp);
+        }
+    }
+
+    # Paint an owner-drawn check/radio/toggle (BS_OWNERDRAW, mounted only in a dark scheme): the 13px
+    # square box (or radio circle), the check mark / radio dot, and the label, coloured from the dark
+    # palette or the node's explicit color/background. The classic renderer would paint a white box +
+    # black label and ignore WM_CTLCOLORBTN; the check state is read live via BM_GETCHECK, so toggling
+    # (click or BM_SETCHECK) repaints the correct mark through the next WM_DRAWITEM.
+    method _draw_check_button ( $node, $di, $record ) {
+        my $hdc = $di->{hDC} or return;
+        my $r = $di->{rcItem};
+        my $sel      = ( $di->{itemState} & 0x0001 ) ? 1 : 0;    # ODS_SELECTED (pressed)
+        my $disabled = ( $di->{itemState} & 0x0004 ) ? 1 : 0;    # ODS_DISABLED
+        my $focus    = ( $di->{itemState} & 0x0010 ) ? 1 : 0;    # ODS_FOCUS
+
+        # Check state: a BS_OWNERDRAW button has NO native check state (its 0xB type bits replace the
+        # auto-check sub-type, so BM_GETCHECK/BM_SETCHECK/BM_CLICK are inert), so the driver mirrors the
+        # flag in the registry record when it mounts an owner-drawn dark control. Light controls never
+        # take this path and keep the native BM_GETCHECK read.
+        my $checked = defined $record->{check} ? $record->{check}
+            : ( ( SendMessageW( $di->{hwndItem}, 0x00F0, 0, 0 ) // 0 ) ? 1 : 0 );    # BM_GETCHECK
+
+        my $box = 13;
+        my $bx  = $r->{left} + 3 + $sel;
+        my $by  = $r->{top} + int( ( ( $r->{bottom} - $r->{top} ) - $box ) / 2 ) + $sel;
+        my $is_radio = $node->type eq 'radio';
+
+        # Palette: node overrides fall back to the dark scheme defaults.
+        my $glyph = $disabled ? '#6A6A6A'
+                  : defined $node->color ? $node->color   # label + check share the node colour...
+                  :                       '#5CA8FF';      # ...otherwise the accent drives the mark
+        my $face   = CreateSolidBrush( $self->_gdi_colorref( $disabled ? '#1F1F24' : ( $node->background // '#2D2D30' ) ) );
+        my $border = CreateSolidBrush( $self->_gdi_colorref( $disabled ? '#3A3A3A' : '#5A5A5A' ) );
+
+        my $rp = malloc( sizeof( RECT() ) );
+        my $rr = cast( $rp, RECT() );
+        ( $rr->{left}, $rr->{top}, $rr->{right}, $rr->{bottom} ) = ( $bx, $by, $bx + $box, $by + $box );
+
+        if ($is_radio) {
+            # Concentric circles (ring -> face -> dot) via Ellipse with the brush selected into the
+            # DC; a NULL_PEN leaves no black outline. FillRect cannot draw circles.
+            my $old = SelectObject( $hdc, GetStockObject(8) );    # NULL_PEN
+            SelectObject( $hdc, $border );
+            Ellipse( $hdc, $bx, $by, $bx + $box, $by + $box );
+            SelectObject( $hdc, $face );
+            Ellipse( $hdc, $bx + 2, $by + 2, $bx + $box - 2, $by + $box - 2 );
+            if ($checked) {
+                my $g = CreateSolidBrush( $self->_gdi_colorref($glyph) );
+                SelectObject( $hdc, $g );
+                Ellipse( $hdc, $bx + 4, $by + 4, $bx + $box - 3, $by + $box - 3 );
+                DeleteObject($g);
+            }
+            SelectObject( $hdc, $old );
+        }
+        else {
+            FillRect( $hdc, $rp, $face );
+            FrameRect( $hdc, $rp, $border );
+            if ($checked) {
+                # Classic check stroke: two segments through the box, drawn with a 2px solid pen.
+                my $pen = CreatePen( 0, 2, $self->_gdi_colorref($glyph) );
+                my $old = SelectObject( $hdc, $pen );
+                MoveToEx( $hdc, $bx + 2, $by + 7, undef );
+                LineTo(   $hdc, $bx + 5, $by + 10 );
+                LineTo(   $hdc, $bx + 11, $by + 3 );
+                SelectObject( $hdc, $old );
+                DeleteObject($pen);
+            }
+        }
+        free($rp);
+        DeleteObject($face);
+        DeleteObject($border);
+
+        # Label to the right of the box.
+        my $label = $node->label // '';
+        if ( CORE::length($label) ) {
+            my $hfont = $self->_get_font( $node->font, $node->font_size );
+            my $old   = SelectObject( $hdc, $hfont ) if $hfont;
+            SetBkMode( $hdc, 1 );    # TRANSPARENT
+            SetTextColor( $hdc, $self->_gdi_colorref( $disabled ? '#9E9E9E' : ( defined $node->color ? $node->color : '#E6E6E6' ) ) );
+            my $tp = malloc( sizeof( RECT() ) );
+            my $tr = cast( $tp, RECT() );
+            ( $tr->{left}, $tr->{top}, $tr->{right}, $tr->{bottom} ) = ( $bx + $box + 5, $r->{top} + $sel, $r->{right} - 3, $r->{bottom} + $sel );
+            DrawTextW( $hdc, $self->_nz($label), -1, $tp, 0x0824 );    # DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX
+            free($tp);
+            SelectObject( $hdc, $old ) if $old;
+        }
+
+        if ($focus) {
+            my $fp = malloc( sizeof( RECT() ) );
+            my $fr = cast( $fp, RECT() );
+            ( $fr->{left}, $fr->{top}, $fr->{right}, $fr->{bottom} ) = ( $r->{left}, $r->{top}, $r->{right}, $r->{bottom} );
+            DrawFocusRect( $hdc, $fp );
+            free($fp);
+        }
+    }
+
+    # Owner-drawn dark radios have no native group state: clicking one must move every sibling's
+    # registry flag and repaint them, exactly like the native WS_GROUP auto-radio behaviour would.
+    # The group record is found by scanning the registry (radio_group nodes hold their child ids).
+    method _radio_group_for ($record) {
+        my $node = $record->{node} or return;
+        for my $id ( keys %$registry ) {
+            my $g = $registry->{$id} or next;
+            next unless $g->{node} && $g->{node}->type eq 'radio_group';
+            for my $kid ( @{ $g->{node}->children } ) {
+                return $g if $kid->id eq $node->id;
+            }
+        }
+        return;
+    }
+
+    # Set the whole group's selection: BM_SETCHECK for native light radios, the registry flag + a
+    # forced repaint for owner-drawn dark ones.
+    method _apply_radio_group ( $grp, $value ) {
+        for my $child ( @{ $grp->{node}->children } ) {
+            my $cr = $registry->{ $child->id } or next;
+            my $on = ( $child->value eq $value ) ? 1 : 0;
+            $cr->{check} = $on;
+            SendMessageW( $cr->{hwnd}, 0x00F1, $on, 0 );    # BM_SETCHECK (inert for owner-draw)
+            if ( $self->uses_dark_mode ) {
+                InvalidateRect( $cr->{hwnd}, undef, 1 );
+            }
         }
     }
 
@@ -2035,6 +2199,18 @@ affix 'uxtheme',  'SetWindowTheme', [ Pointer [Void], String, String ] => Int;
         # allocator and are registered in the reverse map `cid_to_id`.
         my $cid = $vnode->id =~ /^\d+$/ ? 0 + $vnode->id : ++$cid_counter;
         $cid_to_id->{$cid} = $vnode->id;
+
+        # Dark scheme: render check/radio/toggle widgets owner-drawn through WM_DRAWITEM so the
+        # box (or circle), the check mark, and the label honour the dark palette. The classic
+        # renderer paints a white box + black label and ignores WM_CTLCOLORBTN, so this is the only
+        # cross-build way to get a dark check/radio. BS_OWNERDRAW (0xB) keeps the auto-check /
+        # auto-radio toggle and BN_CLICKED live.
+        if ( $self->uses_dark_mode
+            && ( $vnode->type eq 'checkbox' || $vnode->type eq 'radio'
+                || $vnode->type eq 'toggle_switch' || $vnode->type eq 'toggle_button' ) ) {
+            $style |= 0x000B;
+        }
+
         my $hwnd = CreateWindowExW( 0, $class, $self->_nz($initial_text),
             $style, $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $cid, undef, undef );
         $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode, parent_hwnd => $parent_hwnd, surface => 'main', cid => $cid };
@@ -2106,6 +2282,16 @@ if ( $vnode->type eq 'spinner' ) {
         }
         if ( $vnode->type eq 'toggle_switch' || $vnode->type eq 'toggle_button' ) {
             SendMessageW( $hwnd, 0x00F1, $vnode->checked ? 1 : 0, 0 );    # BM_SETCHECK
+        }
+
+        # Dark owner-draw checks/radios/toggles: the native control keeps NO check state (its
+        # BS_OWNERDRAW type bits replace the auto-check sub-type), so mirror the initial flag in the
+        # registry record. _draw_check_button and the BN_CLICKED/set_prop paths read and update it.
+        if ( $self->uses_dark_mode
+            && ( $vnode->type eq 'checkbox' || $vnode->type eq 'radio'
+                || $vnode->type eq 'toggle_switch' || $vnode->type eq 'toggle_button' ) ) {
+            $registry->{ $vnode->id }{check}
+                = $vnode->type eq 'radio' ? ( $vnode->selected ? 1 : 0 ) : ( $vnode->checked ? 1 : 0 );
         }
         if ( $vnode->type eq 'spin_box' ) {
             $self->_mount_spin_buddy( $parent_hwnd, $vnode );
@@ -2587,18 +2773,10 @@ if ( $vnode->type eq 'spinner' ) {
                 return;
             }
             if ( $record->{node}->type eq 'radio_group' ) {
-                my $selected_radio = '';
-                for my $child ( @{ $record->{node}->children } ) {
-                    $selected_radio = $child->id if $child->value eq $value;
-                }
-                for my $child ( @{ $record->{node}->children } ) {
-                    my $cr = $registry->{ $child->id };
-                    next unless $cr;
 
-                    # BM_SETCHECK: 1 = checked, 0 = unchecked
-                    SendMessageW( $cr->{hwnd}, 0x00F1, $child->id eq $selected_radio ? 1 : 0, 0 );
-                }
-                return;
+                # BM_SETCHECK on each native radio + the owner-drawn dark registry flags (there is no
+                # native group state for BS_OWNERDRAW, so the flag + a forced repaint carry the dot).
+                return $self->_apply_radio_group( $record, $value );
             }
             if ( $record->{node}->type eq 'tree_view' ) {
                 return $self->_select_tree_value( $vnode_id, $value );
@@ -2719,6 +2897,13 @@ if ( $vnode->type eq 'spinner' ) {
             my $t = $record->{node}->type;
             return unless $t eq 'checkbox' || $t eq 'toggle_switch' || $t eq 'toggle_button';
             SendMessageW( $record->{hwnd}, 0x00F1, $value ? 1 : 0, 0 );
+
+            # Owner-drawn dark checks repaint on the next WM_DRAWITEM; make sure one is posted even
+            # when the state barely changes (native controls invalidate on an actual change only).
+            if ( $self->uses_dark_mode ) {
+                $record->{check} = $value ? 1 : 0;
+                InvalidateRect( $record->{hwnd}, undef, 1 );
+            }
         }
         elsif ( $prop_name eq 'options' ) {    # combo_box / list_box: rebuild item strings + reselect
             return unless $record->{node}->type eq 'combo_box' || $record->{node}->type eq 'list_box';

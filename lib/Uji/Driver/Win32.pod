@@ -159,6 +159,50 @@ driver also runs on builds without them; nothing is called unless C<uses_dark_mo
 C<AllowDarkModeForWindow> is applied during the top window's C<WM_NCCREATE> (it is ignored after
 creation).
 
+=begin comment
+
+Owner-drawn dark checks: B<the offline paint test chain does NOT work> here. An owner-drawn
+BUTTON paints when the button's WndProc receives C<WM_PAINT>, which only happens inside a live
+ShowWindow/UpdateWindow pump; an I<offline> C<InvalidateRect>+C<UpdateWindow> chain posts nothing.
+To force one render from a test, send C<WM_PAINT> (0x000F) synchronously to the control with
+C<SendMessageW>; the button replies by sending C<WM_DRAWITEM> to its parent, whose wndproc is the
+driver's C<_ctrl_msg>. See C<t/037_owner_draw_check.t>.
+
+=end comment
+
+=head2 Owner-drawn dark checks, radios and toggles
+
+The Win32 classic/theme renderer has no dark parts for C<BUTTON> checks, radios or push-like
+toggle buttons, so in a dark scheme the driver mounts these controls with C<BS_OWNERDRAW> (0xB)
+and paints them from the dark palette through C<WM_DRAWITEM> in C<_draw_check_button> (square box /
+radio circle, accent check mark / dot, and a light label). In light mode the native sub-types are
+kept (BS_AUTOCHECKBOX = 3, BS_AUTORADIOBUTTON = 9) and the system renders them.
+
+Two consequences of C<BS_OWNERDRAW> to be aware of:
+
+=over
+
+=item *
+
+There is I<no native check state>. C<BS_OWNERDRAW> replaces the auto-check sub-type, so
+C<BM_GETCHECK>/C<BM_SETCHECK> are inert and C<BM_CLICK> does not toggle anything natively. The
+driver mirrors the check/selection in the registry record: the C<check> key is written at mount
+from C<checked> (checkbox/toggle) or C<selected> (radio), flipped on the C<BN_CLICKED> that
+C<BM_CLICK> - and real clicks - still generate, and written by C<set_prop('checked')> and the
+C<radio_group> C<value> branch. C<_draw_check_button> reads that flag first and only falls back to
+C<BM_GETCHECK> for legacy light paths. Radio siblings synchronise through the registry via
+C<_radio_group_for> + C<_apply_radio_group>, since WS_GROUP auto-radio behaviour does not exist for
+the owner-drawn type.
+
+=item *
+
+C<WM_DRAWITEM> is delivered to the control's I<parent> window (the app window), not to the control.
+The parent's wndproc is the driver's C<_ctrl_msg>, which resolves the control by C<hwndItem> and
+dispatches to the draw handler. The C<DRAWITEMSTRUCT.hwndItem> field is typed C<Size_t>
+(not an opaque pointer) so the HWND value survives the Affix round-trip.
+
+=back
+
 =head1 How it Works
 
 =head3 The Window Procedure

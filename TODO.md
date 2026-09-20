@@ -486,15 +486,14 @@ function RETURN values and WNDPROC LRESULTs must hand Windows the raw number.
 defaults, light `GetSysColorBrush` fallback) now return `Affix::address($brush)` — a plain 64-bit GDI
 handle. WNDPROC LRESULTs in general must be plain integers, not Affix pointer objects.
 
-**Residual (documented, not fixable here):** checkboxes/radios/toggle buttons render their own white box +
-black label in the classic renderer and ignore the CTLCOLOR brush/label colour; push buttons are never
-dark in Win32. `SetWindowTheme(_, 'DarkMode_Explorer', _)` on BUTTON/EDIT is a silent no-op on this build
-(the uxtheme ordinals bind but the Explorer theme has no dark parts for them), so those classes stay in
-the CTLCOLOR path — verified pixel-identical with and without the theme (EDITs paint `#2D2D30` via the
-fixed brush either way). On builds where the theme DOES bind, `_theme_control` gives native dark
-checkboxes instead; the two paths are mutually benign. STATIC text is not themed (the CTLCOLOR brush
-handles it unconditionally). Separator statics report GetPixel CLR_INVALID on their own DC (a probe
-artifact, not a white fill).
+**Residual (documented, mostly resolved):** this build's uxtheme "Explorer" theme has no dark parts for
+BUTTON/EDIT, so `SetWindowTheme(_, 'DarkMode_Explorer', _)` is a silent no-op for them and they fall to
+the CTLCOLOR path. Checkboxes/radios/toggle buttons no longer need it: in a dark scheme they mount with
+`BS_OWNERDRAW` and are painted from the palette through `WM_DRAWITEM` (see the "Owner-drawn dark
+checks/radios/toggles" section in `lib/Uji/Driver/Win32.pod` and `t/037_owner_draw_check.t`). What
+remains is EDIT/combobox fields (CTLCOLOR paints them `#2D2D30` with light text via the fixed brush —
+verified pixel-identical with and without the theme) and push buttons (never dark in Win32). STATIC text
+is not themed (the CTLCOLOR brush handles it unconditionally).
 
 **Extra:** `_frame_dark` now also requests rounded corners (`DWMWA_WINDOW_CORNER_PREFERENCE`=33,
 `DWMWCP_ROUND`=2) and a Mica backdrop (`DWMWA_SYSTEMBACKDROP_TYPE`=38, `DWMSBT_MAINWINDOW`=2); both are
@@ -503,11 +502,14 @@ v6 (modern visual styles) for driver demos/tests.
 **Regression tooling kept:** the driver-side `UJI_DEBUG_COLORS=1` pixel ledger (GetPixel on every
 control's own DC) — replaces the screen-capture probes, which ReadBitmap/PrintWindow/EnumWindows
 approaches could not do reliably cross-process.
-**Follow-up candidate:** owner-drawn dark checkboxes/radios. The classic renderer refuses to darken the
-box or recolor its label (CTLCOLORBTN is ignored at the paint level), so the only cross-build way to get
-a truly dark check/radio is `BS_OWNERDRAW` + a `WM_DRAWITEM` path drawing the square/circle, check/glyph,
-and label from the scheme palette (the driver already has `WM_DRAWITEM` plumbing for the owner-drawn
-`color_button`). Push buttons are not in scope (never dark in Win32).
+**Owner-drawn dark checks/radios/toggles: DONE.** The classic renderer refuses to darken the box or
+recolor its label (CTLCOLORBTN is ignored at the paint level), so in a dark scheme the driver mounts
+check/radio/toggle `BUTTON`s with `BS_OWNERDRAW` (0xB) and paints box/circle, accent check/dot, and a
+light label through `WM_DRAWITEM` (`_draw_check_button`). Because `BS_OWNERDRAW` replaces the native
+auto-check sub-type, `BM_GETCHECK`/`BM_SETCHECK` are inert; the driver mirrors the state in the registry
+`check` flag (mount, `BN_CLICKED`, `set_prop('checked')`, `radio_group` `value`) and summons the render
+by sending `WM_PAINT` to the control. Covered by `t/037_owner_draw_check.t` (dark pixel probes + light
+native-style assertions). Push buttons are not in scope (never dark in Win32).
 
 ---
 
