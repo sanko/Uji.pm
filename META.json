@@ -44,6 +44,10 @@
          "file" : "lib/Uji/App.pm",
          "version" : "v0.0.1"
       },
+      "Uji::Cmd" : {
+         "file" : "lib/Uji/Cmd.pm",
+         "version" : "v0.0.1"
+      },
       "Uji::Driver" : {
          "file" : "lib/Uji/Driver.pm",
          "version" : "v0.0.1"

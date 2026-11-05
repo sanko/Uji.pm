@@ -5,6 +5,7 @@ package Uji v0.0.1 {
     use Exporter qw[import];
     #
     use Uji::App;
+    use Uji::Cmd;
     use Uji::Driver;
     use Uji::Layout;
     use Uji::Reconciler;
@@ -50,6 +51,7 @@ package Uji v0.0.1 {
                 combo_box list_box spin_box date_picker toggle_switch spacer
                 every batch none
                 menu_bar menu menu_item menu_separator
+                message_box file_open_dialog file_save_dialog
                 ]
         ]
     );
@@ -90,6 +92,11 @@ package Uji v0.0.1 {
     sub menu           (%args) { Uji::Node::Menu->new(%args) }
     sub menu_item      (%args) { Uji::Node::MenuItem->new(%args) }
     sub menu_separator (%args) { Uji::Node::MenuSeparator->new(%args) }
+
+    # Commands / Dialogs
+    sub message_box      (%args) { Uji::Cmd::message_box(%args) }
+    sub file_open_dialog (%args) { Uji::Cmd::file_open_dialog(%args) }
+    sub file_save_dialog (%args) { Uji::Cmd::file_save_dialog(%args) }
 };
 #
 1;

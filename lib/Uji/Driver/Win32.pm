@@ -68,6 +68,36 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'user32', 'AppendMenuW',     [ Pointer [Void], UInt, Size_t, WString ] => Int;
         affix 'user32', 'SetMenu',         [ Pointer [Void], Pointer [Void] ]        => Int;
         affix 'user32', 'DrawMenuBar',     [ Pointer [Void] ]                        => Int;
+
+        # Dialogs
+        affix 'user32', 'MessageBoxW', [ Pointer [Void], WString, WString, UInt ] => Int;
+
+        # File open/save dialogs
+        typedef OPENFILENAMEW => Struct [
+            lStructSize       => ULong,
+            hwndOwner         => Pointer [Void],
+            hInstance         => Pointer [Void],
+            lpstrFilter       => Pointer [Void],
+            lpstrCustomFilter => Pointer [Void],
+            nMaxCustFilter    => ULong,
+            nFilterIndex      => ULong,
+            lpstrFile         => Pointer [Void],
+            nMaxFile          => ULong,
+            lpstrFileTitle    => Pointer [Void],
+            nMaxFileTitle     => ULong,
+            lpstrInitialDir   => WString,
+            lpstrTitle        => WString,
+            Flags             => ULong,
+            nFileOffset       => UShort,
+            nFileExtension    => UShort,
+            lpstrDefExt       => WString,
+            lCustData         => SSize_t,
+            lpfnHook          => Pointer [Void],
+            lpTemplateName    => Pointer [Void]
+        ];
+        affix 'comdlg32', 'GetOpenFileNameW', [ Pointer [ OPENFILENAMEW() ] ] => Int;
+        affix 'comdlg32', 'GetSaveFileNameW', [ Pointer [ OPENFILENAMEW() ] ] => Int;
+
         # Read native control text
         typedef RECT => Struct [ left => Int, top => Int, right => Int, bottom => Int ];
         typedef POINT => Struct [ x => Int, y => Int ];
@@ -1176,6 +1206,77 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         if ( $record->{aux_hwnd} ) {
             SetWindowPos( $record->{aux_hwnd}, undef, $x + $w - 16, $y, 16, $h, 0x0004 | 0x0100 );
         }
+    }
+
+    method show_message_box (%args) {
+        my $title   = $args{title}   // 'Message';
+        my $message = $args{message} // '';
+        my $type    = $args{type}    // 'ok';
+        my $icon    = $args{icon}    // 'info';
+        my $flags   = 0x00000000;                                       # MB_OK
+        if    ( $type eq 'ok_cancel' )     { $flags = 0x00000001; }
+        elsif ( $type eq 'yes_no' )        { $flags = 0x00000004; }
+        elsif ( $type eq 'yes_no_cancel' ) { $flags = 0x00000003; }
+        if    ( $icon eq 'warning' )       { $flags |= 0x00000030; }
+        elsif ( $icon eq 'error' )         { $flags |= 0x00000010; }
+        elsif ( $icon eq 'question' )      { $flags |= 0x00000020; }
+        else                               { $flags |= 0x00000040; }    # MB_ICONINFORMATION
+        my $res = MessageBoxW( $main_hwnd, $message, $title, $flags );
+        return 'ok'     if $res == 1;
+        return 'cancel' if $res == 2;
+        return 'yes'    if $res == 6;
+        return 'no'     if $res == 7;
+        return 'unknown';
+    }
+
+    method show_file_open_dialog (%args) {
+        return $self->_show_file_dialog( \%args, 1 );
+    }
+
+    method show_file_save_dialog (%args) {
+        return $self->_show_file_dialog( \%args, 0 );
+    }
+
+    method _show_file_dialog ( $args, $is_open ) {
+        my $buf = malloc( 1024 * sizeof(WChar) );
+
+        # Build double-null terminated wide filter string: "Label\0Pattern\0Label2\0Pattern2\0\0"
+        my $raw_filter  = '';
+        my $filter_list = $args->{filter} // [ 'All Files (*.*)' => '*.*' ];
+        for ( my $i = 0; $i < @$filter_list; $i += 2 ) {
+            $raw_filter .= Encode::encode( 'UTF-16LE', $filter_list->[$i] ) . "\0\0";
+            $raw_filter .= Encode::encode( 'UTF-16LE', $filter_list->[ $i + 1 ] ) . "\0\0";
+        }
+        $raw_filter .= "\0\0";    # Terminal double-null for OPENFILENAMEW
+        my $filter_len = length($raw_filter);
+        my $filter_buf = malloc($filter_len);
+        memcpy( $filter_buf, $raw_filter, $filter_len );
+
+        # Zero-initialize the output buffer so lpstrFile is empty
+        memcpy( $buf, "\0" x ( 1024 * sizeof(WChar) ), 1024 * sizeof(WChar) );
+        my $ofn_ptr = malloc( sizeof( OPENFILENAMEW() ) );
+        my $ofn     = cast( $ofn_ptr, OPENFILENAMEW() );
+        $ofn->{lStructSize}     = sizeof( OPENFILENAMEW() );
+        $ofn->{hwndOwner}       = $main_hwnd;
+        $ofn->{lpstrFilter}     = $filter_buf;
+        $ofn->{lpstrFile}       = $buf;
+        $ofn->{nMaxFile}        = 1024;
+        $ofn->{lpstrInitialDir} = $args->{initial_dir} if $args->{initial_dir};
+        $ofn->{lpstrTitle}      = $args->{title} // ( $is_open ? 'Open File' : 'Save File' );
+
+        # OFN_EXPLORER (0x00080000) | OFN_FILEMUSTEXIST (0x1000) | OFN_PATHMUSTEXIST (0x800)
+        $ofn->{Flags} = $is_open ? ( 0x00080000 | 0x00001000 | 0x00000800 ) : ( 0x00080000 | 0x00000002 );
+        my $ok     = $is_open ? GetOpenFileNameW($ofn_ptr) : GetSaveFileNameW($ofn_ptr);
+        my $result = '';
+        if ($ok) {
+            my $raw = Affix::raw( $buf, 1024 * sizeof(WChar) );
+            $result = Encode::decode( 'UTF-16LE', $raw );
+            $result =~ s/\0.*$//s;
+        }
+        free($filter_buf);
+        free($buf);
+        free($ofn_ptr);
+        return $ok ? $result : undef;
     }
 };
 1;

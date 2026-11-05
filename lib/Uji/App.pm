@@ -98,6 +98,7 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
         ( $model, my $cmd ) = $init->();
         $self->_mount;
         $self->_sync_subscriptions;
+        $self->_run_cmd($cmd) if $cmd;
     }
 
     # Mount the window, lay out the initial vtree, and create the child widgets.
@@ -126,6 +127,7 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
         exit(0) if ref $first_msg eq 'HASH' && $first_msg->{type} eq 'QUIT';
         my @batch = ($first_msg);
         push @batch, $channel->get() while $channel->size;
+        my @cmds;
         for my $m (@batch) {
             exit(0) if ref $m eq 'HASH' && $m->{type} eq 'QUIT';
 
@@ -134,9 +136,11 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
             next if $m->{type} eq 'RESIZE';
             ( my $new_model, my $new_cmd ) = $update->( $m, $model );
             $model = $new_model;
+            push @cmds, $new_cmd if $new_cmd;
         }
         $self->_render;
         $self->_sync_subscriptions;
+        $self->_run_cmd($_) for @cmds;
     }
 
     method run () {
@@ -156,6 +160,19 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
                 }
             };
         };
+    }
+
+    method _run_cmd ($cmd) {
+        return unless $cmd;
+        if ( ref $cmd eq 'ARRAY' ) {
+            $self->_run_cmd($_) for @$cmd;
+            return;
+        }
+        if ( blessed($cmd) && $cmd->can('run') ) {
+            fiber {
+                $cmd->run( $channel, $driver );
+            };
+        }
     }
 };
 1;
