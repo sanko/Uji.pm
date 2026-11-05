@@ -2,6 +2,7 @@ use v5.40;
 use experimental 'class';
 class Uji::Node v0.0.1 {    # Base class for all VDOM nodes
     field $id : param : reader : writer //= __CLASS__->_rand_id;
+    field $key : param : reader = undef;
     sub _rand_id { CORE::state $id //= 100; ++$id; }
     field $type    : reader = __CLASS__->_type;
     field $x       : param : reader = 0;       # requested x
