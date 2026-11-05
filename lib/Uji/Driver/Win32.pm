@@ -208,7 +208,11 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         free($buf);
 
         # Decode directly to Perl UTF-8 without touching C pointer types
-        return Encode::decode( 'UTF-16LE', $raw_bytes );
+        my $text = Encode::decode( 'UTF-16LE', $raw_bytes );
+
+        # EDIT controls hand back CRLF for multiline content; keep the model in LF form.
+        $text =~ s/\r\n/\n/g;
+        return $text;
     }
     method _get_registry_record ($id) { $registry->{$id} }
 
