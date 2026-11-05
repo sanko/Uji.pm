@@ -456,9 +456,21 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         UpdateWindow($main_hwnd);
     }
 
-    method mount_widget ( $vnode, $parent_hwnd = undef ) {
-        $parent_hwnd //= $main_hwnd;
-        $self->_mount_node( $vnode, $parent_hwnd );
+    method mount_widget ( $vnode, $parent_node_id = undef ) {
+        my $parent_hwnd      = $main_hwnd;
+        my $parent_scroll_id = undef;
+        if ($parent_node_id) {
+            my $prec = $registry->{$parent_node_id};
+            if ($prec) {
+                $parent_hwnd      = $prec->{hwnd} || $prec->{parent_hwnd} || $main_hwnd;
+                $parent_scroll_id = ( $prec->{node}->type eq 'scroll_view' ) ? $prec->{node}->id : $prec->{parent_scroll_id};
+            }
+        }
+        $self->_mount_node( $vnode, $parent_hwnd, $parent_scroll_id );
+        if ($parent_scroll_id) {
+            $self->_update_scroll_info($parent_scroll_id);
+        }
+        RedrawWindow( $parent_hwnd, undef, undef, 0x0185 );
     }
 
     method destroy_widget ($id) {
@@ -820,8 +832,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $style = 0x50000000 | ( $vnode->indeterminate ? 0x0008 : 0 );
         }
         else {
+            $registry->{ $vnode->id } = { hwnd => undef, node => $vnode, parent_hwnd => $parent_hwnd, parent_scroll_id => $parent_scroll_id };
             $self->_mount_node( $_, $parent_hwnd, $parent_scroll_id ) for @{ $vnode->children };
-            $registry->{ $vnode->id } = { hwnd => undef, node => $vnode, parent_scroll_id => $parent_scroll_id } if $vnode->type eq 'radio_group';
             return;
         }
         my $init_x = $vnode->bx;
@@ -989,7 +1001,22 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 return;
             }
             if ( $record->{node}->type eq 'progress_bar' ) {
-                SendMessageW( $record->{hwnd}, 0x0402, $value, 0 );
+                my $hwnd = $record->{hwnd};
+                my $max  = $record->{node}->max // 100;
+                if ( $value < $max ) {
+
+                    # Classic Win32 instant-draw trick: stepping backward by 1 forces
+                    # ComCtl32 to cancel the 400ms visual easing animation
+                    SendMessageW( $hwnd, 0x0402, $value + 1, 0 );    # PBM_SETPOS
+                    SendMessageW( $hwnd, 0x0402, $value,     0 );    # PBM_SETPOS
+                }
+                else {
+                    # At maximum: temporarily expand range by 1 to force instant 100% completion
+                    SendMessageW( $hwnd, 0x0406, $record->{node}->min, $max + 1 );    # PBM_SETRANGE32
+                    SendMessageW( $hwnd, 0x0402, $max + 1,             0 );
+                    SendMessageW( $hwnd, 0x0402, $max,                 0 );
+                    SendMessageW( $hwnd, 0x0406, $record->{node}->min, $max );        # Restore range
+                }
                 return;
             }
             if ( $record->{node}->type eq 'combo_box' ) {

@@ -110,6 +110,9 @@ provides:
   Uji::Reconciler:
     file: lib/Uji/Reconciler.pm
     version: v0.0.1
+  Uji::Sub:
+    file: lib/Uji/Sub.pm
+    version: v0.0.1
 requires:
   Acme::Parataxis: '0'
   Affix: '0'

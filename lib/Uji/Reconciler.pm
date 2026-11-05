@@ -21,16 +21,15 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         $driver->destroy_widget( $node->id );
     }
 
-    method patch ( $old_node, $new_node, $driver ) {
+    method patch ( $old_node, $new_node, $driver, $parent_node_id = undef ) {
         return unless $old_node && $new_node;
 
         # If types differ or keys differ, replace the subtree
         if ( $old_node->type ne $new_node->type || ( defined $old_node->key && defined $new_node->key && $old_node->key ne $new_node->key ) ) {
             $self->_destroy_subtree( $old_node, $driver );
-            $driver->mount_widget($new_node);
+            $driver->mount_widget( $new_node, $parent_node_id );
             return;
         }
-        #
         $new_node->set_id( $old_node->id );
         $driver->update_registry($new_node);
 
@@ -42,79 +41,97 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
+        # Check scroll_y / scroll_x (ScrollView)
+        if ( $old_node->can('scroll_y') && $new_node->can('scroll_y') ) {
+            if ( ( $old_node->scroll_y // 0 ) != ( $new_node->scroll_y // 0 ) ) {
+                $driver->set_prop( $new_node->id, 'scroll_y', $new_node->scroll_y );
+            }
+        }
+        if ( $old_node->can('scroll_x') && $new_node->can('scroll_x') ) {
+            if ( ( $old_node->scroll_x // 0 ) != ( $new_node->scroll_x // 0 ) ) {
+                $driver->set_prop( $new_node->id, 'scroll_x', $new_node->scroll_x );
+            }
+        }
+
         # Check title (Window)
         if ( $old_node->can('title') && $new_node->can('title') ) {
-            if ( $old_node->title // '' ne $new_node->title // '' ) {
+            if ( ( $old_node->title // '' ) ne ( $new_node->title // '' ) ) {
                 $driver->set_prop( $new_node->id, 'title', $new_node->title );
             }
         }
 
         # Check label (Text/Buttons/Checkbox/Radio/ToggleSwitch)
         if ( $old_node->can('label') && $new_node->can('label') ) {
-            if ( $old_node->label // '' ne $new_node->label // '' ) {
+            if ( ( $old_node->label // '' ) ne ( $new_node->label // '' ) ) {
                 $driver->set_prop( $new_node->id, 'label', $new_node->label );
             }
         }
 
-        # Check value (TextInput/Password/MulilineText/Slider/DatePicker/Spinbox)
-        # radio_group is handled after the child loop so its radio children have stable, transferred IDs.
+        # Check value (TextInput, Password, MultilineText, Slider, DatePicker, SpinBox, ProgressBar)
         if ( $old_node->can('value') && $new_node->can('value') && $new_node->type ne 'radio_group' ) {
-            if ( $old_node->value // '' ne $new_node->value // '' ) {
+            if ( ( $old_node->value // '' ) ne ( $new_node->value // '' ) ) {
                 $driver->set_prop( $new_node->id, 'value', $new_node->value );
+            }
+        }
+
+        # Check indeterminate (ProgressBar)
+        if ( $old_node->can('indeterminate') && $new_node->can('indeterminate') ) {
+            if ( ( $old_node->indeterminate // 0 ) != ( $new_node->indeterminate // 0 ) ) {
+                $driver->set_prop( $new_node->id, 'indeterminate', $new_node->indeterminate );
             }
         }
 
         # Check selection (ListBox)
         if ( $old_node->can('selection') && $new_node->can('selection') ) {
-            if ( $old_node->selection // '' ne $new_node->selection // '' ) {
+            if ( ( $old_node->selection // '' ) ne ( $new_node->selection // '' ) ) {
                 $driver->set_prop( $new_node->id, 'selection', $new_node->selection );
             }
         }
 
-        # Check range (Slider/Spinbox)
+        # Check range (Slider, SpinBox)
         if ( $old_node->can('min') && $new_node->can('min') ) {
-            if ( $old_node->min // '' ne $new_node->min // '' ) {
+            if ( ( $old_node->min // '' ) ne ( $new_node->min // '' ) ) {
                 $driver->set_prop( $new_node->id, 'min', $new_node->min );
             }
         }
         if ( $old_node->can('max') && $new_node->can('max') ) {
-            if ( $old_node->max // '' ne $new_node->max // '' ) {
+            if ( ( $old_node->max // '' ) ne ( $new_node->max // '' ) ) {
                 $driver->set_prop( $new_node->id, 'max', $new_node->max );
             }
         }
 
-        # Check step (Slider/Spinbox)
+        # Check step (Slider, SpinBox)
         if ( $old_node->can('step') && $new_node->can('step') ) {
-            if ( $old_node->step // '' ne $new_node->step // '' ) {
+            if ( ( $old_node->step // '' ) ne ( $new_node->step // '' ) ) {
                 $driver->set_prop( $new_node->id, 'step', $new_node->step );
             }
         }
 
         # Check enabled (all widgets)
         if ( $old_node->can('enabled') && $new_node->can('enabled') ) {
-            if ( $old_node->enabled // 1 != $new_node->enabled // 1 ) {
+            if ( ( $old_node->enabled // 1 ) != ( $new_node->enabled // 1 ) ) {
                 $driver->set_prop( $new_node->id, 'enabled', $new_node->enabled );
             }
         }
 
         # Check visible (all widgets)
         if ( $old_node->can('visible') && $new_node->can('visible') ) {
-            if ( $old_node->visible // 1 != $new_node->visible // 1 ) {
+            if ( ( $old_node->visible // 1 ) != ( $new_node->visible // 1 ) ) {
                 $driver->set_prop( $new_node->id, 'visible', $new_node->visible );
             }
         }
 
-        # Check focused (TextInput/Password)
+        # Check focused
         if ( $old_node->can('focused') && $new_node->can('focused') ) {
             if ( ( $old_node->focused // 0 ) != ( $new_node->focused // 0 ) ) {
                 $driver->set_prop( $new_node->id, 'focused', $new_node->focused );
             }
         }
 
-        # Check tooltip (all widgets)
-        if ( $old_node->can('focused') && $new_node->can('focused') ) {
-            if ( ( $old_node->focused // 0 ) != ( $new_node->focused // 0 ) ) {
-                $driver->set_prop( $new_node->id, 'focused', $new_node->focused );
+        # Check tooltip
+        if ( $old_node->can('tooltip') && $new_node->can('tooltip') ) {
+            if ( ( $old_node->tooltip // '' ) ne ( $new_node->tooltip // '' ) ) {
+                $driver->set_prop( $new_node->id, 'tooltip', $new_node->tooltip );
             }
         }
 
@@ -137,29 +154,10 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
-        # Check indeterminate (ProgressBar)
-        if ( $old_node->can('indeterminate') && $new_node->can('indeterminate') ) {
-            if ( ( $old_node->indeterminate // 0 ) != ( $new_node->indeterminate // 0 ) ) {
-                $driver->set_prop( $new_node->id, 'indeterminate', $new_node->indeterminate );
-            }
-        }
-
         # Window geometry / state (topmost, min/max, minimized, maximized)
         if ( $old_node->can('topmost') && $new_node->can('topmost') ) {
             if ( ( $old_node->topmost // 0 ) != ( $new_node->topmost // 0 ) ) {
                 $driver->set_prop( $new_node->id, 'topmost', $new_node->topmost );
-            }
-        }
-
-        # Check scroll_y / scroll_x (ScrollView)
-        if ( $old_node->can('scroll_y') && $new_node->can('scroll_y') ) {
-            if ( ( $old_node->scroll_y // 0 ) != ( $new_node->scroll_y // 0 ) ) {
-                $driver->set_prop( $new_node->id, 'scroll_y', $new_node->scroll_y );
-            }
-        }
-        if ( $old_node->can('scroll_x') && $new_node->can('scroll_x') ) {
-            if ( ( $old_node->scroll_x // 0 ) != ( $new_node->scroll_x // 0 ) ) {
-                $driver->set_prop( $new_node->id, 'scroll_x', $new_node->scroll_x );
             }
         }
         for my $p (qw[minimized maximized]) {
@@ -187,7 +185,7 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
-        # Reconcile child collection
+        # Reconcile child collection passing the current container id
         $self->_patch_children( $old_node, $new_node, $driver );
 
         # RadioGroup selection: diff AFTER the child loop so the radio children carry their
@@ -238,11 +236,11 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
         # Destroy old unreferenced children
         $self->_destroy_subtree( $_, $driver ) for values %old_by_key, @old_unkeyed;
 
-        # Patch matched existing children
-        $self->patch( $_->[0], $_->[1], $driver ) for @matched_pairs;
+        # Patch matched existing children passing current container node ID
+        $self->patch( $_->[0], $_->[1], $driver, $new_node->id ) for @matched_pairs;
 
-        # Mount brand-new children
-        $driver->mount_widget($_) for @to_mount;
+        # Mount brand-new children passing current container node ID
+        $driver->mount_widget( $_, $new_node->id ) for @to_mount;
     }
 };
 1;

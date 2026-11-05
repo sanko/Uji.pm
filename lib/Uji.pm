@@ -27,6 +27,7 @@ package Uji v0.0.1 {
     use Uji::Layout;
     use Uji::Driver;
     use Uji::Reconciler;
+    use Uji::Sub;
     use Uji::App;
     use Exporter qw[import];
     #
@@ -40,7 +41,9 @@ package Uji v0.0.1 {
                 button
                 checkbox radio_group
                 slider  progress_bar
-                combo_box list_box spin_box date_picker toggle_switch spacer]
+                combo_box list_box spin_box date_picker toggle_switch spacer
+                every batch none
+                ]
         ]
     );
     #
@@ -69,6 +72,11 @@ package Uji v0.0.1 {
         $args{flex} //= 1 unless defined $args{w} || defined $args{h};
         Uji::Node::Spacer->new(%args);
     }
+
+    # Subscription primitives
+    sub every ( $ms, $action, %args ) { Uji::Sub::every( $ms, $action, %args ) }
+    sub batch (@subs)                 { Uji::Sub::batch(@subs) }
+    sub none () { Uji::Sub::none() }
 };
 #
 1;

@@ -229,7 +229,12 @@ class Uji::Layout v0.0.1 {
             if ( $node->h ) {
                 $h = $node->h;
             }
-            elsif ( $node->type ne 'column' && $node->type ne 'row' ) {
+            elsif ( $node->flex > 0 && $avail_h > 0 ) {
+
+                # Flex-driven height takes precedence over intrinsic fallback
+                $h = $avail_h;
+            }
+            elsif ( $node->type ne 'column' && $node->type ne 'row' && $node->type ne 'scroll_view' ) {
                 my ( $iw, $ih ) = $self->_intrinsic($node);
                 $h = $ih;
                 $w = $iw if !$node->w && $node->flex <= 0 && $avail_w == 0;
@@ -248,7 +253,6 @@ class Uji::Layout v0.0.1 {
         }
         elsif ( $node->type eq 'scroll_view' ) {
             if ( $node->child ) {
-
                 # In a ScrollView, the content canvas is measured in unconstrained space
                 # Reserve 18px for the native vertical scrollbar
                 my $canvas_avail_w = $w > 18 ? $w - 18 : $w;
