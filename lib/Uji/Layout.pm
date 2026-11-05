@@ -7,9 +7,11 @@ class Uji::Layout v0.0.1 {
     method _intrinsic ($node) {
         my $t = $node->type;
 
-        # Flexible whitespace has 0 intrinsic size (or explicit fixed w/h)
+        # Flexible whitespace: reserve its min_w (or 20px if flexible) so auto-sizing allocates space
         if ( $t eq 'spacer' ) {
-            return ( $node->w || 0, $node->h || 0 );
+            my $w = $node->w || $node->min_w || ( $node->flex > 0 ? 20 : 0 );
+            my $h = $node->h || $node->min_h || 0;
+            return ( $w, $h );
         }
 
         # Static text label: measure text with headroom for ascenders/descenders
@@ -34,11 +36,12 @@ class Uji::Layout v0.0.1 {
             return ( $max_w, $total_h );
         }
 
-        # Push button: text metrics + button chrome margins
+        # Push button: text metrics + bevel padding with standard minimum width
         if ( $t eq 'button' ) {
             my $label = $node->label // '';
             my ( $tw, $th ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
             $tw += 28;                             # horizontal padding for push button bevel
+            $tw = 60 if $tw < 60;                  # standard minimum button width
             $th = ( $th < 16 ? 16 : $th ) + 10;    # vertical padding
             $th = 26 if $th < 26;                  # standard minimum button height
             return ( $tw, $th );
@@ -175,6 +178,29 @@ class Uji::Layout v0.0.1 {
             my $h = $max_h + ( $pad * 2 );
             return ( $w, $h );
         }
+
+        # GroupBox container: frame + child content + title
+        if ( $t eq 'group_box' ) {
+            my $pad     = $node->padding;
+            my $top_pad = $pad + 12;            # extra headroom for the etched title text
+            my $label   = $node->label // '';
+            my ( $lw, $lh ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
+            my ( $cw, $ch ) = ( 0, 0 );
+            if ( $node->child ) {
+                ( $cw, $ch ) = $self->_intrinsic( $node->child );
+                $cw = $node->child->w if $node->child->w;
+                $ch = $node->child->h if $node->child->h;
+            }
+            my $min_title_w = $lw + 32;
+            my $w           = ( $cw > $min_title_w ? $cw : $min_title_w ) + ( $pad * 2 );
+            my $h           = $ch + $top_pad + $pad;
+            return ( $w, $h );
+        }
+
+        # Progress bar: standard bar width / height
+        if ( $t eq 'progress_bar' ) {
+            return ( 160, 20 );
+        }
         return ( 100, 30 );
     }
 
@@ -231,6 +257,19 @@ class Uji::Layout v0.0.1 {
         }
         elsif ( $node->type eq 'row' ) {
             $self->_layout_flex( $node, 'horizontal', $start_x, $start_y, $w, $h );
+        }
+        elsif ( $node->type eq 'group_box' ) {
+            if ( $node->child ) {
+                my $pad     = $node->padding;
+                my $top_pad = $pad + 12;
+                my $inner_x = $start_x + $pad;
+                my $inner_y = $start_y + $top_pad;
+                my $inner_w = $w - ( $pad * 2 );
+                my $inner_h = $h - $top_pad - $pad;
+                $inner_w = 0 if $inner_w < 0;
+                $inner_h = 0 if $inner_h < 0;
+                $self->compute( $node->child, $inner_x, $inner_y, $inner_w, $inner_h );
+            }
         }
     }
 

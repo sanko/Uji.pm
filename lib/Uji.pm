@@ -21,6 +21,8 @@ package Uji v0.0.1 {
     use Uji::Node::TextInput;
     use Uji::Node::ToggleSwitch;
     use Uji::Node::Window;
+    use Uji::Node::ProgressBar;
+    use Uji::Node::GroupBox;
     use Uji::Layout;
     use Uji::Driver;
     use Uji::Reconciler;
@@ -30,7 +32,14 @@ package Uji v0.0.1 {
     our %EXPORT_TAGS = (
         all => [
             our @EXPORT
-                = qw[app window column row text button text_input password slider checkbox radio_group multiline_text combo_box list_box spin_box date_picker toggle_switch spacer]
+                = qw[
+                app window  group_box
+                column row
+                text   text_input password multiline_text
+                button
+                checkbox radio_group
+                slider  progress_bar
+                combo_box list_box spin_box date_picker toggle_switch spacer]
         ]
     );
     #
@@ -51,6 +60,8 @@ package Uji v0.0.1 {
     sub spin_box       (%args)           { Uji::Node::SpinBox->new(%args) }
     sub date_picker    (%args)           { Uji::Node::DatePicker->new(%args) }
     sub toggle_switch  (%args)           { Uji::Node::ToggleSwitch->new(%args) }
+    sub group_box      (%args)           { Uji::Node::GroupBox->new(%args) }
+    sub progress_bar   (%args)           { Uji::Node::ProgressBar->new(%args) }
 
     sub spacer (%args) {
         $args{flex} //= 1 unless defined $args{w} || defined $args{h};

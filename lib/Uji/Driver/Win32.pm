@@ -49,6 +49,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'user32', 'InvalidateRect',   [ Pointer [Void], Pointer [Void], Int ]                      => Int;
         affix 'user32', 'LoadCursorW',      [ Pointer [Void], Size_t ]                                   => Pointer [Void];
         affix 'user32', 'GetSystemMetrics', [Int]                                                        => Int;
+        affix 'user32', 'GetWindowLongW',   [ Pointer [Void], Int ]                                      => Int;
+        affix 'user32', 'SetWindowLongW',   [ Pointer [Void], Int, Int ]                                 => Int;
         affix 'user32', 'SendMessageW',     [ Pointer [Void], UInt, Size_t, SSize_t ]                    => SSize_t;
 
         # Same entry point, but with a marshalled wide-string lParam (combo/list item text).
@@ -106,7 +108,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $icc   = malloc( sizeof( INITCOMMONCONTROLSEX() ) );
         my $icc_s = cast( $icc, INITCOMMONCONTROLSEX() );
         $icc_s->{dwSize} = sizeof( INITCOMMONCONTROLSEX() );
-        $icc_s->{dwICC}  = 0x00000004 | 0x00000010 | 0x00000100;    # BAR | UPDOWN | DATE classes
+        $icc_s->{dwICC}  = 0x00000004 | 0x00000010 | 0x00000020 | 0x00000100;    # BAR | UPDOWN | PROGRESS | DATE
         InitCommonControlsEx($icc);
         free($icc);
     }
@@ -603,6 +605,17 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $class = 'SysDateTimePick32';
             $style = 0x50000000;
         }
+        elsif ( $vnode->type eq 'group_box' ) {
+            $class        = 'BUTTON';
+            $style        = 0x50000007;            # WS_CHILD | WS_VISIBLE | BS_GROUPBOX
+            $initial_text = $vnode->label // '';
+        }
+        elsif ( $vnode->type eq 'progress_bar' ) {
+            $class = 'msctls_progress32';
+
+            # WS_CHILD | WS_VISIBLE | (PBS_MARQUEE if indeterminate)
+            $style = 0x50000000 | ( $vnode->indeterminate ? 0x0008 : 0 );
+        }
         else {
             $self->_mount_node( $_, $parent_hwnd ) for @{ $vnode->children };
             $registry->{ $vnode->id } = { hwnd => undef, node => $vnode } if $vnode->type eq 'radio_group';
@@ -650,6 +663,18 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         if ( $vnode->type eq 'date_picker' ) {
             $self->_set_date_value( $hwnd, $vnode->value );
             SetFocus($hwnd) if $vnode->focused;
+        }
+        if ( $vnode->type eq 'progress_bar' ) {
+            SendMessageW( $hwnd, 0x0406, $vnode->min,   $vnode->max );    # PBM_SETRANGE32
+            SendMessageW( $hwnd, 0x0402, $vnode->value, 0 );              # PBM_SETPOS
+            if ( $vnode->indeterminate ) {
+                SendMessageW( $hwnd, 0x040A, 1, 30 );                     # PBM_SETMARQUEE (start, 30ms)
+            }
+        }
+
+        # If it's a group box, mount its inner children after creating the group box HWND
+        if ( $vnode->type eq 'group_box' && $vnode->child ) {
+            $self->_mount_node( $vnode->child, $parent_hwnd );
         }
     }
 
@@ -736,6 +761,10 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $self->_set_list_selection( $record->{hwnd}, $record->{node}, $value );
         }
         elsif ( $prop_name eq 'value' ) {
+            if ( $record->{node}->type eq 'progress_bar' ) {
+                SendMessageW( $record->{hwnd}, 0x0402, $value, 0 );    # PBM_SETPOS
+                return;
+            }
             if ( $record->{node}->type eq 'slider' ) {
                 SendMessageW( $record->{hwnd}, 0x0405, 1, $value );
                 return;
@@ -823,6 +852,25 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             }
             else {
                 SendMessageW( $record->{hwnd}, 0x0406, 1, ( $max << 16 ) | $min );
+            }
+        }
+        elsif ( $prop_name eq 'indeterminate' ) {
+            if ( $record->{node}->type eq 'progress_bar' ) {
+                my $hwnd  = $record->{hwnd};
+                my $style = GetWindowLongW( $hwnd, -16 );    # -16 = GWL_STYLE
+                if ($value) {
+
+                    # Add PBS_MARQUEE (0x0008) and start the animation timer
+                    SetWindowLongW( $hwnd, -16, $style | 0x0008 );
+                    SendMessageW( $hwnd, 0x040A, 1, 30 );    # PBM_SETMARQUEE (1 = start, 30ms)
+                }
+                else {
+                    # Stop animation timer, remove PBS_MARQUEE, and restore the static progress value
+                    SendMessageW( $hwnd, 0x040A, 0, 0 );                              # PBM_SETMARQUEE (0 = stop)
+                    SetWindowLongW( $hwnd, -16, $style & ~0x0008 );
+                    SendMessageW( $hwnd, 0x0402, $record->{node}->value // 0, 0 );    # PBM_SETPOS
+                }
+                return;
             }
         }
     }

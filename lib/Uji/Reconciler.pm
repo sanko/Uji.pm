@@ -137,6 +137,13 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
+        # Check indeterminate (ProgressBar)
+        if ( $old_node->can('indeterminate') && $new_node->can('indeterminate') ) {
+            if ( ( $old_node->indeterminate // 0 ) != ( $new_node->indeterminate // 0 ) ) {
+                $driver->set_prop( $new_node->id, 'indeterminate', $new_node->indeterminate );
+            }
+        }
+
         # Window geometry / state (topmost, min/max, minimized, maximized)
         if ( $old_node->can('topmost') && $new_node->can('topmost') ) {
             if ( ( $old_node->topmost // 0 ) != ( $new_node->topmost // 0 ) ) {
