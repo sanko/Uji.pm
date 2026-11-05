@@ -80,6 +80,22 @@
          "file" : "lib/Uji/Node/Column.pm",
          "version" : "v0.0.1"
       },
+      "Uji::Node::ComboBox" : {
+         "file" : "lib/Uji/Node/ComboBox.pm",
+         "version" : "v0.0.1"
+      },
+      "Uji::Node::DatePicker" : {
+         "file" : "lib/Uji/Node/DatePicker.pm",
+         "version" : "v0.0.1"
+      },
+      "Uji::Node::ListBox" : {
+         "file" : "lib/Uji/Node/ListBox.pm",
+         "version" : "v0.0.1"
+      },
+      "Uji::Node::MultilineText" : {
+         "file" : "lib/Uji/Node/MultilineText.pm",
+         "version" : "v0.0.1"
+      },
       "Uji::Node::Password" : {
          "file" : "lib/Uji/Node/Password.pm",
          "version" : "v0.0.1"
@@ -100,12 +116,24 @@
          "file" : "lib/Uji/Node/Slider.pm",
          "version" : "v0.0.1"
       },
+      "Uji::Node::Spacer" : {
+         "file" : "lib/Uji/Node/Spacer.pm",
+         "version" : "v0.0.1"
+      },
+      "Uji::Node::SpinBox" : {
+         "file" : "lib/Uji/Node/SpinBox.pm",
+         "version" : "v0.0.1"
+      },
       "Uji::Node::Text" : {
          "file" : "lib/Uji/Node/Text.pm",
          "version" : "v0.0.1"
       },
       "Uji::Node::TextInput" : {
          "file" : "lib/Uji/Node/TextInput.pm",
+         "version" : "v0.0.1"
+      },
+      "Uji::Node::ToggleSwitch" : {
+         "file" : "lib/Uji/Node/ToggleSwitch.pm",
          "version" : "v0.0.1"
       },
       "Uji::Node::Window" : {

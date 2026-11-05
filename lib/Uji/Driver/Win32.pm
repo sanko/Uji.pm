@@ -14,6 +14,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     field $tooltip_hwnd    : reader                      = undef;
     field $on_resize       : reader(_get_resize_handler) = undef;
     field $suppress_events : reader(_is_suppressed)      = 0;
+    field $gui_font;
     ADJUST {
         $registry = {};
         typedef WNDPROC => Callback [ [ Pointer [Void], UInt, Size_t, SSize_t ] => SSize_t ];
@@ -34,6 +35,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'user32', 'RegisterClassExW', [ Pointer [ WNDCLASSEXW() ] ] => UShort;
         affix 'user32', 'CreateWindowExW',
             [ ULong, WString, WString, ULong, Int, Int, Int, Int, Pointer [Void], Size_t, Pointer [Void], Pointer [Void] ] => SSize_t;
+        affix 'user32', 'DestroyWindow',    [ Pointer [Void] ]                                           => Int;
         affix 'user32', 'ShowWindow',       [ Pointer [Void], Int ]                                      => Int;
         affix 'user32', 'SetWindowTextW',   [ Pointer [Void], WString ]                                  => Int;
         affix 'user32', 'EnableWindow',     [ Pointer [Void], Int ]                                      => Int;
@@ -49,9 +51,25 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'user32', 'GetSystemMetrics', [Int]                                                        => Int;
         affix 'user32', 'SendMessageW',     [ Pointer [Void], UInt, Size_t, SSize_t ]                    => SSize_t;
 
+        # Same entry point, but with a marshalled wide-string lParam (combo/list item text).
+        affix 'user32', [ 'SendMessageW', 'SendMessageWStr' ], [ Pointer [Void], UInt, Size_t, WString ] => SSize_t;
+
         # Read native control text
         typedef RECT => Struct [ left => Int, top => Int, right => Int, bottom => Int ];
         typedef POINT => Struct [ x => Int, y => Int ];
+        typedef SYSTEMTIME => Struct [
+            wYear         => UShort,
+            wMonth        => UShort,
+            wDayOfWeek    => UShort,
+            wDay          => UShort,
+            wHour         => UShort,
+            wMinute       => UShort,
+            wSecond       => UShort,
+            wMilliseconds => UShort
+        ];
+        typedef NMHDR            => Struct [ hwndFrom => Pointer [Void], idFrom => Size_t, code => Int ];
+        typedef NMDATETIMECHANGE => Struct [ nmhdr    => NMHDR(), dwFlags => ULong, st => SYSTEMTIME() ];
+        typedef UDACCEL          => Struct [ nSec     => UInt, nInc => UInt ];
         typedef MINMAXINFO =>
             Struct [ ptReserved => POINT(), ptMaxSize => POINT(), ptMaxPosition => POINT(), ptMinTrackSize => POINT(), ptMaxTrackSize => POINT() ];
         typedef TOOLINFO => Struct [
@@ -79,23 +97,30 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'gdi32',  'GetTextExtentPoint32W', [ Pointer [Void], WString, Int, Pointer [Void] ] => Int;
         typedef SIZE => Struct [ cx => Int, cy => Int ];
 
+        # DEFAULT_GUI_FONT (17) matches standard controls and font metrics
+        $gui_font = GetStockObject(17);
+
         # Common controls (trackbar/slider, etc.)
         typedef INITCOMMONCONTROLSEX => Struct [ dwSize => ULong, dwICC => ULong ];
         affix 'comctl32', 'InitCommonControlsEx', [ Pointer [ INITCOMMONCONTROLSEX() ] ] => Int;
         my $icc   = malloc( sizeof( INITCOMMONCONTROLSEX() ) );
         my $icc_s = cast( $icc, INITCOMMONCONTROLSEX() );
         $icc_s->{dwSize} = sizeof( INITCOMMONCONTROLSEX() );
-        $icc_s->{dwICC}  = 0x00000004;                         # ICC_BAR_CLASSES (includes trackbars)
+        $icc_s->{dwICC}  = 0x00000004 | 0x00000010 | 0x00000100;    # BAR | UPDOWN | DATE classes
         InitCommonControlsEx($icc);
         free($icc);
+    }
+
+    # Apply the standard GUI font to child controls via WM_SETFONT (0x0030)
+    method _apply_font ($hwnd) {
+        return unless $hwnd && $gui_font;
+        SendMessageW( $hwnd, 0x0030, Affix::address($gui_font), 1 );
     }
 
     method init ($app_channel) {
         $channel = $app_channel;
         my $self_ref = $self;
         $wndproc_cb = sub ( $hwnd, $msg, $wparam, $lparam ) {
-
-            #printf "hwnd=%s msg=0x%04X wp=%s lp=%s\n", $hwnd, $msg, $wparam, $lparam;
             if ( $msg == 0x0111 ) {    # WM_COMMAND
                 my $control_id  = $wparam & 0xFFFF;
                 my $notify_code = ( $wparam >> 16 ) & 0xFFFF;
@@ -108,7 +133,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                         $self_ref->channel->put( $node->on_click );
                     }
 
-                    # BN_CLICKED (0) -> Checkbox toggle: read the actual state back from the control
+                    # BN_CLICKED (0) -> Checkbox toggle: read actual state back from the control
                     elsif ( $notify_code == 0 && $node->can('on_toggle') && $node->on_toggle ) {
                         my $checked    = SendMessageW( $record->{hwnd}, 0x00F0, 0, 0 );    # BM_GETCHECK
                         my $action_msg = $node->on_toggle->( $checked ? 1 : 0 );
@@ -121,10 +146,47 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                         $self_ref->channel->put($action_msg) if $action_msg;
                     }
 
+                    # CBN_SELCHANGE (1) -> ComboBox selection: map native index back to value
+                    elsif ( $notify_code == 1 && $node->type eq 'combo_box' && $node->on_select ) {
+                        my $idx = SendMessageW( $record->{hwnd}, 0x0147, 0, 0 );    # CB_GETCURSEL
+                        if ( $idx >= 0 && $idx <= $#{ $node->options } ) {
+                            my $action_msg = $node->on_select->( $node->options->[$idx]{value} );
+                            $self_ref->channel->put($action_msg) if $action_msg;
+                        }
+                    }
+
+                    # CBN_EDITCHANGE (5) -> ComboBox edit text changed by user
+                    elsif ( $notify_code == 5 && $node->type eq 'combo_box' && $node->can('on_input') && $node->on_input ) {
+                        return DefWindowProcW( $hwnd, $msg, $wparam, $lparam ) if $self_ref->_is_suppressed;
+                        my $text       = $self_ref->_get_text( $record->{hwnd} );
+                        my $action_msg = $node->on_input->($text);
+                        $self_ref->channel->put($action_msg) if $action_msg;
+                    }
+
+                    # LBN_SELCHANGE (1) -> ListBox selection
+                    elsif ( $notify_code == 1 && $node->type eq 'list_box' && $node->on_select ) {
+                        my $idx = SendMessageW( $record->{hwnd}, 0x0188, 0, 0 );    # LB_GETCURSEL
+                        if ( $idx >= 0 && $idx <= $#{ $node->options } ) {
+                            my $action_msg = $node->on_select->( $node->options->[$idx]{value} );
+                            $self_ref->channel->put($action_msg) if $action_msg;
+                        }
+                    }
+
+                    # EN_CHANGE (0x0300) -> SpinBox text changed
+                    elsif ( $notify_code == 0x0300 && $node->type eq 'spin_box' && $node->on_change ) {
+                        return DefWindowProcW( $hwnd, $msg, $wparam, $lparam ) if $self_ref->_is_suppressed;
+                        my $text = $self_ref->_get_text( $record->{hwnd} );
+                        if ( $text =~ /^\s*(-?\d+)\s*$/ ) {
+                            my $num = $1;
+                            $num = $node->min if $num < $node->min;
+                            $num = $node->max if $num > $node->max;
+                            my $action_msg = $node->on_change->($num);
+                            $self_ref->channel->put($action_msg) if $action_msg;
+                        }
+                    }
+
                     # EN_CHANGE (0x0300) -> Text changed by user typing
                     elsif ( $notify_code == 0x0300 && $node->can('on_input') && $node->on_input ) {
-
-                        # Ignore EN_CHANGE if triggered programmatically by SetWindowTextW!
                         return DefWindowProcW( $hwnd, $msg, $wparam, $lparam ) if $self_ref->_is_suppressed;
                         my $text       = $self_ref->_get_text( $record->{hwnd} );
                         my $action_msg = $node->on_input->($text);
@@ -132,20 +194,31 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                     }
                 }
             }
-            elsif ( $msg == 0x0002 ) {    # WM_DESTROY
+            elsif ( $msg == 0x004E ) {    # WM_NOTIFY -> date picker
+                my $hdr    = cast( $lparam, NMHDR() );
+                my $record = $self_ref->_get_registry_record( $hdr->{idFrom} );
+                if ( $record && $record->{node}->type eq 'date_picker' && $hdr->{code} == -759 ) {    # DTN_DATETIMECHANGE
+                    my $change = cast( $lparam, NMDATETIMECHANGE() );
+                    my $node   = $record->{node};
+                    if ( $node->on_change ) {
+                        my $value = $change->{dwFlags} == 1 ? '' :
+                            sprintf( '%04d-%02d-%02d', $change->{st}{wYear}, $change->{st}{wMonth}, $change->{st}{wDay} );
+                        my $action_msg = $node->on_change->($value);
+                        $self_ref->channel->put($action_msg) if $action_msg;
+                    }
+                }
+            }
+            elsif ( $msg == 0x0002 ) {    # WM_DESTROY -> main window closed; signal application termination
                 $self_ref->channel->put( { type => 'QUIT' } );
             }
             elsif ( $msg == 0x0005 ) {    # WM_SIZE -> window was resized; re-layout
-
-                # lParam low/high words = new client W/H, so we can re-layout synchronously (the
-                # renderer fiber is blocked inside the modal drag loop).
                 my $cw = $lparam & 0xFFFF;
                 my $ch = ( $lparam >> 16 ) & 0xFFFF;
                 $self_ref->channel->put( { type => 'RESIZE' } );
                 my $cb = $self_ref->_get_resize_handler;
                 $cb->( $cw, $ch ) if $cb;
             }
-            elsif ( $msg == 0x0024 ) {    # WM_GETMINMAXINFO -> clamp window track sizes to min/max
+            elsif ( $msg == 0x0024 ) {    # WM_GETMINMAXINFO -> clamp window track sizes
                 my $vn = $self_ref->main_vnode;
                 if ($vn) {
                     my $mmi = cast( $lparam, MINMAXINFO() );
@@ -154,7 +227,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                     if ( $min_w || $min_h || $max_w || $max_h ) {
                         if ( $min_w || $min_h ) {
                             my ( $ow, $oh ) = $self_ref->_frame_size_for_client( $min_w || 1, $min_h || 1 );
-                            $mmi->{ptMinTrackSize}{x} = $ow if $min_w;    # only constrain the axis given
+                            $mmi->{ptMinTrackSize}{x} = $ow if $min_w;
                             $mmi->{ptMinTrackSize}{y} = $oh if $min_h;
                         }
                         if ( $max_w || $max_h ) {
@@ -162,12 +235,10 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                             $mmi->{ptMaxTrackSize}{x} = $ow if $max_w;
                             $mmi->{ptMaxTrackSize}{y} = $oh if $max_h;
                         }
-                        return 0;    # handled
+                        return 0;
                     }
                 }
                 return DefWindowProcW( $hwnd, $msg, $wparam, $lparam );
-            }
-            elsif ( $msg == 0x020e ) {    # WM_MOVING -> nothing yet
             }
             elsif ( $msg == 0x0114 ) {    # WM_HSCROLL -> slider/trackbar drag
                 my $slider_hwnd = $lparam;
@@ -198,19 +269,11 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     method _get_text ($hwnd) {
         my $len = GetWindowTextLengthW($hwnd);
         return '' if $len <= 0;
-        my $buf = malloc( ( $len + 1 ) * sizeof(WChar) );
-
-        # GetWindowTextW returns the EXACT number of characters copied
-        my $copied = GetWindowTextW( $hwnd, $buf, $len + 1 );
-
-        # Read the raw UTF-16 bytes directly from C memory
+        my $buf       = malloc( ( $len + 1 ) * sizeof(WChar) );
+        my $copied    = GetWindowTextW( $hwnd, $buf, $len + 1 );
         my $raw_bytes = Affix::raw( $buf, $copied * sizeof(WChar) );
         free($buf);
-
-        # Decode directly to Perl UTF-8 without touching C pointer types
         my $text = Encode::decode( 'UTF-16LE', $raw_bytes );
-
-        # EDIT controls hand back CRLF for multiline content; keep the model in LF form.
         $text =~ s/\r\n/\n/g;
         return $text;
     }
@@ -219,43 +282,127 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     method _get_registry_by_hwnd ($hwnd) {
         for my $id ( keys %$registry ) {
             my $rec = $registry->{$id};
-            next unless defined $rec->{hwnd};    # containers (radio_group) have no HWND
+            next unless defined $rec->{hwnd};
             return $rec if $rec->{hwnd} == $hwnd;
+            return $rec if defined $rec->{aux_hwnd} && $rec->{aux_hwnd} == $hwnd;
         }
         return undef;
+    }
+
+    method _option_index ( $node, $value ) {
+        my $options = $node->options;
+        for my $i ( 0 .. $#$options ) {
+            return $i if ( $options->[$i]{value} // '' ) eq ( $value // '' );
+        }
+        return -1;
+    }
+    method _option_label ($opt) { $opt->{label} // $opt->{value} // '' }
+
+    method _populate_options ( $hwnd, $node, $kind ) {
+        my ( $reset, $add ) = $kind eq 'combo_box' ? ( 0x014B, 0x0143 ) : ( 0x0184, 0x0180 );
+        SendMessageW( $hwnd, $reset, 0, 0 );
+        SendMessageWStr( $hwnd, $add, 0, $self->_option_label($_) ) for @{ $node->options };
+    }
+
+    method _set_combo_value ( $hwnd, $node, $value ) {
+        my $idx = $self->_option_index( $node, $value );
+        SendMessageW( $hwnd, 0x014E, $idx, 0 ) if $idx >= 0;
+        if ( $node->editable ) {
+            my $text = $idx >= 0 ? $self->_option_label( $node->options->[$idx] ) : $value;
+            $suppress_events = 1;
+            SetWindowTextW( $hwnd, $text );
+            $suppress_events = 0;
+        }
+    }
+
+    method _set_list_selection ( $hwnd, $node, $value ) {
+        my $idx = $self->_option_index( $node, $value );
+        SendMessageW( $hwnd, 0x0186, $idx, 0 );
+    }
+
+    method _native_newlines ($text) {
+        $text =~ s/\r?\n/\r\n/g;
+        return $text;
+    }
+
+    method _set_spin_range ( $record, $min, $max ) {
+        SendMessageW( $record->{aux_hwnd}, 0x046F, $min, $max );
+    }
+
+    method _set_spin_accel ( $record, $step ) {
+        $step = 1 unless $step && $step > 0;
+        my $buf = malloc( sizeof( UDACCEL() ) );
+        my $acc = cast( $buf, UDACCEL() );
+        $acc->{nSec} = 0;
+        $acc->{nInc} = $step;
+        SendMessageW( $record->{aux_hwnd}, 0x046B, 1, Affix::address($buf) );
+        free($buf);
+    }
+
+    method _set_spin_value ( $record, $value ) {
+        $suppress_events = 1;
+        SendMessageW( $record->{aux_hwnd}, 0x0471, 0, $value );
+        SetWindowTextW( $record->{hwnd}, '' . $value );
+        $suppress_events = 0;
+    }
+
+    method _set_date_value ( $hwnd, $value ) {
+        return unless $value =~ /^(\d{4})-(\d{2})-(\d{2})$/;
+        my ( $year, $month, $day ) = ( $1, $2, $3 );
+        my $buf = malloc( sizeof( SYSTEMTIME() ) );
+        my $st  = cast( $buf, SYSTEMTIME() );
+        $st->{wYear}         = $year;
+        $st->{wMonth}        = $month;
+        $st->{wDay}          = $day;
+        $st->{wDayOfWeek}    = 0;
+        $st->{wHour}         = 0;
+        $st->{wMinute}       = 0;
+        $st->{wSecond}       = 0;
+        $st->{wMilliseconds} = 0;
+        SendMessageW( $hwnd, 0x1002, 0, Affix::address($buf) );
+        free($buf);
     }
     method _is_mounted ()           { $main_hwnd ? 1 : 0 }
     method set_resize_handler ($cb) { $on_resize = $cb; $self }
 
     method update_registry ($node) {
         $registry->{ $node->id }{node} = $node if exists $registry->{ $node->id };
-
-        # Keep the live window node (read by WM_GETMINMAXINFO) current across re-renders.
         if ( $node->type eq 'window' ) {
             $main_vnode = $node;
         }
     }
 
     method mount ($vtree) {
-
-        # Publish the window node before creating the HWND so WM_GETMINMAXINFO (fired during
-        # creation) can read min/max constraints immediately.
         $main_vnode = $vtree;
+
+        # Auto-size window to intrinsic content size when width or height are not explicitly specified
+        my ( $req_cw, $req_ch );
+        if ( ( !$vtree->w || !$vtree->h ) && $vtree->child ) {
+            my $temp_layout = Uji::Layout->new( driver => $self );
+            my ( $iw, $ih ) = $temp_layout->_intrinsic( $vtree->child );
+            $req_cw = $vtree->w || ( $iw < 320 ? 320 : $iw );
+            $req_ch = $vtree->h || ( $ih < 180 ? 180 : $ih );
+        }
+        else {
+            $req_cw = $vtree->w || 640;
+            $req_ch = $vtree->h || 480;
+        }
+
+        # Calculate initial outer dimensions (client area + title bar + borders)
+        my ( $init_ow, $init_oh ) = $self->_frame_size_for_client( $req_cw, $req_ch );
 
         # WS_OVERLAPPEDWINDOW (0x10CF0000); drop WS_THICKFRAME (0x00040000) when not resizable
         my $style = $vtree->resizable ? 0x10CF0000 : 0x10CB0000;
-        $main_hwnd = CreateWindowExW( 0, 'UjiWindowClass', $vtree->title, $style, 100, 100, $vtree->w, $vtree->h, undef, 0, undef, undef );
+        $main_hwnd = CreateWindowExW( 0, 'UjiWindowClass', $vtree->title, $style, 100, 100, $init_ow, $init_oh, undef, 0, undef, undef );
         $registry->{ $vtree->id } = { hwnd => $main_hwnd, node => $vtree };
 
-        # Lay out against the real client area: the outer size includes the title bar and borders,
-        # so we re-measure and fix up the window node before children are computed.
+        # Lay out against real measured client area
         my ( $cw, $ch ) = $self->_get_client_size($main_hwnd);
         $vtree->set_bounds( 0, 0, $cw, $ch );
 
-        # Centering must happen after the window has its final requested size. We re-apply the
-        # driver's own requested size (w/h) so a centered window does not drift from the spec.
+        # Centering window on screen
         if ( $vtree->centered ) {
-            $self->_set_window_outer( $main_hwnd, $vtree->w, $vtree->h, 'center' );
+            $self->_set_window_outer( $main_hwnd, $cw, $ch, 'center' );
             my ( $nw, $nh ) = $self->_get_client_size($main_hwnd);
             $vtree->set_bounds( 0, 0, $nw, $nh );
         }
@@ -264,10 +411,24 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         UpdateWindow($main_hwnd);
     }
 
-    # Resize/reposition the main window from a NEW client size. Computes the outer size from the
-    # client size with AdjustWindowRectEx so the client area ends up exactly x w/h px.
-    # Convert a client-area size into the outer window-rect size (frame + borders), so that
-    # min/max track sizes in WM_GETMINMAXINFO can be expressed in window coordinates.
+    method mount_widget ( $vnode, $parent_hwnd = undef ) {
+        $parent_hwnd //= $main_hwnd;
+        $self->_mount_node( $vnode, $parent_hwnd );
+    }
+
+    method destroy_widget ($id) {
+        my $record = delete $registry->{$id};
+        return unless $record;
+        if ( my $hwnd = $record->{hwnd} ) {
+            $self->_set_tooltip( $hwnd, undef );
+            DestroyWindow($hwnd);
+        }
+        if ( my $aux_hwnd = $record->{aux_hwnd} ) {
+            $self->_set_tooltip( $aux_hwnd, undef );
+            DestroyWindow($aux_hwnd);
+        }
+    }
+
     method _frame_size_for_client ( $cw, $ch ) {
         my $rect_ptr = malloc( sizeof( RECT() ) );
         my $rect     = cast( $rect_ptr, RECT() );
@@ -308,21 +469,13 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         free($rect_ptr);
     }
 
-    # Lazily create the shared tooltip control (created once, owned by the main window).
+    # Lazily create shared tooltip control
     method _ensure_tooltip () {
         return $tooltip_hwnd if $tooltip_hwnd;
-        $tooltip_hwnd = CreateWindowExW(
-            0, 'tooltips_class32',    # TOOLTIPS_CLASS32
-            undef,
-
-            # WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX
-            0x80000003, 0, 0, 0, 0, $main_hwnd, 0, undef, undef
-        );
+        $tooltip_hwnd = CreateWindowExW( 0, 'tooltips_class32', undef, 0x80000003, 0, 0, 0, 0, $main_hwnd, 0, undef, undef );
         return $tooltip_hwnd;
     }
 
-    # Attach/replace/remove a tooltip on a control. uFlags = TTF_IDISHWND | TTF_SUBCLASS.
-    # Deletes any existing tool first so repeated calls (live updates) are idempotent.
     method _set_tooltip ( $hwnd, $text ) {
         return unless $hwnd;
         my $tip = $tooltip_hwnd || $self->_ensure_tooltip();
@@ -330,14 +483,14 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $ti_ptr = malloc( sizeof( TOOLINFO() ) );
         my $ti     = cast( $ti_ptr, TOOLINFO() );
         $ti->{cbSize} = sizeof( TOOLINFO() );
-        $ti->{uFlags} = 0x0001 | 0x0010;                             # TTF_IDISHWND | TTF_SUBCLASS
+        $ti->{uFlags} = 0x0001 | 0x0010;
         $ti->{hwnd}   = $main_hwnd;
         $ti->{uId}    = $hwnd;
-        SendMessageW( $tip, 0x0433, 0, Affix::address($ti_ptr) );    # TTM_DELTOOLW (ignore result)
+        SendMessageW( $tip, 0x0433, 0, Affix::address($ti_ptr) );
 
         if ( defined $text ) {
             $ti->{lpszText} = $text;
-            SendMessageW( $tip, 0x0432, 0, Affix::address($ti_ptr) );    # TTM_ADDTOOLW
+            SendMessageW( $tip, 0x0432, 0, Affix::address($ti_ptr) );
         }
         free($ti_ptr);
     }
@@ -365,9 +518,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $dc = GetDC($font_hwnd);
         return ( 0, 0 ) unless $dc;
 
-        # DEFAULT_GUI_FONT (17) matches what standard controls render with.
-        my $font = GetStockObject(17);
-        SelectObject( $dc, $font );
+        # Select standard GUI font for measurement
+        SelectObject( $dc, $gui_font );
         my $buf = malloc( sizeof( SIZE() ) );
         my $sz  = cast( $buf, SIZE() );
         GetTextExtentPoint32W( $dc, $text, length $text, $buf );
@@ -387,59 +539,72 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     }
 
     method _mount_node ( $vnode, $parent_hwnd ) {
+        if ( $vnode->type eq 'spacer' ) {
+            return;
+        }
+        if ( $vnode->type eq 'spin_box' ) {
+            $self->_mount_spin_box( $vnode, $parent_hwnd );
+            return;
+        }
         my ( $class, $style, $initial_text );
         if ( $vnode->type eq 'button' ) {
             $class        = 'BUTTON';
-            $style        = 0x50000000;            # WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON
+            $style        = 0x50000000;
             $initial_text = $vnode->label // '';
         }
         elsif ( $vnode->type eq 'text' ) {
             $class        = 'STATIC';
-            $style        = 0x50000000;            # WS_CHILD | WS_VISIBLE
+            $style        = 0x50000000;
             $initial_text = $vnode->label // '';
         }
         elsif ( $vnode->type eq 'text_input' ) {
-            $class = 'EDIT';
-
-            # WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL
+            $class        = 'EDIT';
             $style        = 0x50800080;
             $initial_text = $vnode->value // '';
         }
         elsif ( $vnode->type eq 'password' ) {
-            $class = 'EDIT';
-
-            # WS_CHILD | WS_VISIBLE | WS_BORDER | ES_PASSWORD | ES_AUTOHSCROLL
+            $class        = 'EDIT';
             $style        = 0x508000A0;
             $initial_text = $vnode->value // '';
         }
+        elsif ( $vnode->type eq 'multiline_text' ) {
+            $class        = 'EDIT';
+            $style        = 0x50A01044;
+            $initial_text = $self->_native_newlines( $vnode->value // '' );
+        }
         elsif ( $vnode->type eq 'slider' ) {
             $class = 'msctls_trackbar32';
-
-            # WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS | TBS_HORZ
             $style = 0x50000001;
         }
         elsif ( $vnode->type eq 'checkbox' ) {
-            $class = 'BUTTON';
-
-            # WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX (0x3 — the auto variety:
-            # the button toggles itself on click; BS_CHECKBOX (0x2) never does).
+            $class        = 'BUTTON';
             $style        = 0x50000003;
             $initial_text = $vnode->label // '';
         }
+        elsif ( $vnode->type eq 'toggle_switch' ) {
+            $class        = 'BUTTON';
+            $style        = 0x50001003;
+            $initial_text = $vnode->label // '';
+        }
         elsif ( $vnode->type eq 'radio' ) {
-            $class = 'BUTTON';
-
-            # WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON (0x9 — auto: clicking one
-            # checks it and clears the group; BS_RADIOBUTTON (0x4) never does).
-            # (+ WS_GROUP on the first of a group)
+            $class        = 'BUTTON';
             $style        = $vnode->first ? 0x50020009 : 0x50000009;
             $initial_text = $vnode->label // '';
         }
+        elsif ( $vnode->type eq 'combo_box' ) {
+            $class = 'COMBOBOX';
+            $style = $vnode->editable ? 0x50200042 : 0x50200003;
+        }
+        elsif ( $vnode->type eq 'list_box' ) {
+            $class = 'LISTBOX';
+            $style = 0x50A00001;
+        }
+        elsif ( $vnode->type eq 'date_picker' ) {
+            $class = 'SysDateTimePick32';
+            $style = 0x50000000;
+        }
         else {
             $self->_mount_node( $_, $parent_hwnd ) for @{ $vnode->children };
-
-            # Containers have no HWND but radio_group needs a registry entry so set_prop('value')
-            # can route the selection to its radio children.
             $registry->{ $vnode->id } = { hwnd => undef, node => $vnode } if $vnode->type eq 'radio_group';
             return;
         }
@@ -447,50 +612,99 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             undef );
         $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode };
 
-        # Apply initial state for props that aren't baked into styles.
+        # Apply standard modern GUI font to newly created control
+        $self->_apply_font($hwnd);
         EnableWindow( $hwnd, $vnode->enabled ? 1 : 0 );
         ShowWindow( $hwnd, $vnode->visible   ? 5 : 0 );
         $self->_set_tooltip( $hwnd, $vnode->tooltip ) if defined $vnode->tooltip;
-        if ( $vnode->type eq 'text_input' || $vnode->type eq 'password' ) {
-            SendMessageW( $hwnd, 0x00CF, $vnode->readonly ? 1 : 0, 0 );                  # EM_SETREADONLY
-            SendMessageW( $hwnd, 0x00C5, $vnode->maxlength, 0 ) if $vnode->maxlength;    # EM_LIMITTEXT
+        if ( $vnode->type eq 'text_input' || $vnode->type eq 'password' || $vnode->type eq 'multiline_text' ) {
+            SendMessageW( $hwnd, 0x00CF, $vnode->readonly ? 1 : 0, 0 );
+            SendMessageW( $hwnd, 0x00C5, $vnode->maxlength, 0 ) if $vnode->maxlength;
             SetFocus($hwnd) if $vnode->focused;
         }
         if ( $vnode->type eq 'slider' ) {
-
-            # TBM_SETRANGE (0x0406): (max << 16) | min, wParam = redraw
             SendMessageW( $hwnd, 0x0406, 1, ( $vnode->max << 16 ) | $vnode->min );
-            SendMessageW( $hwnd, 0x0405, 1, $vnode->value );                             # TBM_SETPOS
-            SendMessageW( $hwnd, 0x041C, 1, $vnode->step );                              # TBM_SETLINESIZE
-            SendMessageW( $hwnd, 0x041D, 1, $vnode->step );                              # TBM_SETPAGESIZE
+            SendMessageW( $hwnd, 0x0405, 1, $vnode->value );
+            SendMessageW( $hwnd, 0x041C, 1, $vnode->step );
+            SendMessageW( $hwnd, 0x041D, 1, $vnode->step );
         }
-        if ( $vnode->type eq 'checkbox' ) {
-            SendMessageW( $hwnd, 0x00F1, $vnode->checked ? 1 : 0, 0 );                   # BM_SETCHECK
+        if ( $vnode->type eq 'checkbox' || $vnode->type eq 'toggle_switch' ) {
+            SendMessageW( $hwnd, 0x00F1, $vnode->checked ? 1 : 0, 0 );
         }
         if ( $vnode->type eq 'radio' ) {
-            SendMessageW( $hwnd, 0x00F1, $vnode->selected ? 1 : 0, 0 );                  # BM_SETCHECK
+            SendMessageW( $hwnd, 0x00F1, $vnode->selected ? 1 : 0, 0 );
         }
+        if ( $vnode->type eq 'combo_box' ) {
+            $suppress_events = 1;
+            $self->_populate_options( $hwnd, $vnode, 'combo_box' );
+            $self->_set_combo_value( $hwnd, $vnode, $vnode->value );
+            $suppress_events = 0;
+            SetFocus($hwnd) if $vnode->focused;
+        }
+        if ( $vnode->type eq 'list_box' ) {
+            $suppress_events = 1;
+            $self->_populate_options( $hwnd, $vnode, 'list_box' );
+            $self->_set_list_selection( $hwnd, $vnode, $vnode->selection );
+            $suppress_events = 0;
+        }
+        if ( $vnode->type eq 'date_picker' ) {
+            $self->_set_date_value( $hwnd, $vnode->value );
+            SetFocus($hwnd) if $vnode->focused;
+        }
+    }
+
+    # SpinBox = EDIT + UPDOWN buddy control
+    method _mount_spin_box ( $vnode, $parent_hwnd ) {
+        my $edit = CreateWindowExW(
+            0, 'EDIT',
+            '' . ( $vnode->value // 0 ),
+            0x50800080 | 0x2000,
+            $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef, undef
+        );
+        my $updown = CreateWindowExW( 0, 'msctls_updown32', undef, 0x500000B2, $vnode->bx + $vnode->bw - 16,
+            $vnode->by, 16, $vnode->bh, $parent_hwnd, 0, undef, undef );
+        my $record = { hwnd => $edit, aux_hwnd => $updown, node => $vnode };
+        $registry->{ $vnode->id } = $record;
+
+        # Set font on both buddy controls
+        $self->_apply_font($edit);
+        $self->_apply_font($updown);
+        SendMessageW( $updown, 0x0469, $edit,    0 );
+        SendMessageW( $edit,   0x00D3, 20 << 16, 0 );
+        $self->_set_spin_range( $record, $vnode->min, $vnode->max );
+        $self->_set_spin_accel( $record, $vnode->step );
+        $self->_set_spin_value( $record, $vnode->value );
+        EnableWindow( $edit,   $vnode->enabled ? 1 : 0 );
+        EnableWindow( $updown, $vnode->enabled ? 1 : 0 );
+        ShowWindow( $edit,   $vnode->visible ? 5 : 0 );
+        ShowWindow( $updown, $vnode->visible ? 5 : 0 );
+
+        if ( defined $vnode->tooltip ) {
+            $self->_set_tooltip( $edit,   $vnode->tooltip );
+            $self->_set_tooltip( $updown, $vnode->tooltip );
+        }
+        SetFocus($edit) if $vnode->focused;
     }
 
     method set_prop ( $vnode_id, $prop_name, $value ) {
         my $record = $registry->{$vnode_id};
         return unless $record;
-        if ( $prop_name eq 'title' ) {    # Window title (root node)
+        if ( $prop_name eq 'title' ) {
             $main_hwnd = $record->{hwnd};
             SetWindowTextW( $main_hwnd, $value );
         }
-        elsif ( $prop_name eq 'topmost' ) {    # window: toggle always-on-top
+        elsif ( $prop_name eq 'topmost' ) {
             SetWindowPos( $record->{hwnd}, $value ? -1 : -2, 0, 0, 0, 0, 0x0013 );
         }
-        elsif ( $prop_name eq 'minimized' || $prop_name eq 'maximized' ) {    # window state
+        elsif ( $prop_name eq 'minimized' || $prop_name eq 'maximized' ) {
             if ($value) {
-                ShowWindow( $record->{hwnd}, $prop_name eq 'minimized' ? 2 : 3 );    # SW_MINIMIZE / SW_MAXIMIZE
+                ShowWindow( $record->{hwnd}, $prop_name eq 'minimized' ? 2 : 3 );
             }
             else {
-                ShowWindow( $record->{hwnd}, 9 );                                    # SW_RESTORE
+                ShowWindow( $record->{hwnd}, 9 );
             }
         }
-        elsif ( $prop_name =~ /^(min|max)_[wh]$/ ) {                                 # window min/max -> re-clamp live
+        elsif ( $prop_name =~ /^(min|max)_[wh]$/ ) {
             my $vn = $main_vnode || $record->{node};
             my ( $cw, $ch ) = $self->_get_client_size( $record->{hwnd} );
             my ( $nw, $nh ) = ( $cw, $ch );
@@ -504,9 +718,40 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             SetWindowTextW( $record->{hwnd}, $value );
             InvalidateRect( $record->{hwnd}, undef, 1 );
         }
+        elsif ( $prop_name eq 'options' ) {
+            my $node = $record->{node};
+            return unless $node->type eq 'combo_box' || $node->type eq 'list_box';
+            $suppress_events = 1;
+            $self->_populate_options( $record->{hwnd}, $node, $node->type );
+            if ( $node->type eq 'combo_box' ) {
+                $self->_set_combo_value( $record->{hwnd}, $node, $node->value );
+            }
+            else {
+                $self->_set_list_selection( $record->{hwnd}, $node, $node->selection );
+            }
+            $suppress_events = 0;
+        }
+        elsif ( $prop_name eq 'selection' ) {
+            return unless $record->{node}->type eq 'list_box';
+            $self->_set_list_selection( $record->{hwnd}, $record->{node}, $value );
+        }
         elsif ( $prop_name eq 'value' ) {
             if ( $record->{node}->type eq 'slider' ) {
                 SendMessageW( $record->{hwnd}, 0x0405, 1, $value );
+                return;
+            }
+            if ( $record->{node}->type eq 'combo_box' ) {
+                $suppress_events = 1;
+                $self->_set_combo_value( $record->{hwnd}, $record->{node}, $value );
+                $suppress_events = 0;
+                return;
+            }
+            if ( $record->{node}->type eq 'spin_box' ) {
+                $self->_set_spin_value( $record, $value );
+                return;
+            }
+            if ( $record->{node}->type eq 'date_picker' ) {
+                $self->_set_date_value( $record->{hwnd}, $value );
                 return;
             }
             if ( $record->{node}->type eq 'radio_group' ) {
@@ -517,68 +762,78 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 for my $child ( @{ $record->{node}->children } ) {
                     my $cr = $registry->{ $child->id };
                     next unless $cr;
-
-                    # BM_SETCHECK: 1 = checked, 0 = unchecked
                     SendMessageW( $cr->{hwnd}, 0x00F1, $child->id eq $selected_radio ? 1 : 0, 0 );
                 }
                 return;
             }
-
-            # Only update if the native control differs (prevents typing cursor jump)
+            my $text    = $record->{node}->type eq 'multiline_text' ? $self->_native_newlines($value) : $value;
             my $current = $self->_get_text( $record->{hwnd} );
             if ( $current ne $value ) {
                 $suppress_events = 1;
-                SetWindowTextW( $record->{hwnd}, $value );
+                SetWindowTextW( $record->{hwnd}, $text );
                 $suppress_events = 0;
-
-                # SetWindowTextW snaps the caret to position 0; move it to the end.
                 my $len = length $value;
                 SendMessageW( $record->{hwnd}, 0x00B1, $len, $len );
             }
         }
-        elsif ( $prop_name eq 'enabled' ) {    # all widgets
-            EnableWindow( $record->{hwnd}, $value ? 1 : 0 );
+        elsif ( $prop_name eq 'enabled' ) {
+            EnableWindow( $record->{hwnd},     $value ? 1 : 0 );
+            EnableWindow( $record->{aux_hwnd}, $value ? 1 : 0 ) if $record->{aux_hwnd};
         }
-        elsif ( $prop_name eq 'visible' ) {    # all widgets
-            ShowWindow( $record->{hwnd}, $value ? 5 : 0 );
+        elsif ( $prop_name eq 'visible' ) {
+            ShowWindow( $record->{hwnd},     $value ? 5 : 0 );
+            ShowWindow( $record->{aux_hwnd}, $value ? 5 : 0 ) if $record->{aux_hwnd};
         }
-        elsif ( $prop_name eq 'focused' ) {    # text_input / password
+        elsif ( $prop_name eq 'focused' ) {
             SetFocus( $record->{hwnd} ) if $value;
         }
-        elsif ( $prop_name eq 'tooltip' ) {    # all widgets
-            $self->_set_tooltip( $record->{hwnd}, $value );
+        elsif ( $prop_name eq 'tooltip' ) {
+            $self->_set_tooltip( $record->{hwnd},     $value );
+            $self->_set_tooltip( $record->{aux_hwnd}, $value ) if $record->{aux_hwnd};
         }
-        elsif ( $prop_name eq 'readonly' ) {    # EDIT: EM_SETREADONLY
-            return unless $record->{node}->can('value');
+        elsif ( $prop_name eq 'readonly' ) {
+            return unless $record->{node}->type =~ /^(?:text_input|password|multiline_text)$/;
             SendMessageW( $record->{hwnd}, 0x00CF, $value ? 1 : 0, 0 );
         }
-        elsif ( $prop_name eq 'maxlength' ) {    # EDIT: EM_LIMITTEXT
-            return unless $record->{node}->can('value');
+        elsif ( $prop_name eq 'maxlength' ) {
+            return unless $record->{node}->type =~ /^(?:text_input|password|multiline_text)$/;
             SendMessageW( $record->{hwnd}, 0x00C5, $value, 0 );
         }
-        elsif ( $prop_name eq 'step' ) {         # slider: TBM_SETLINESIZE / TBM_SETPAGESIZE
-            return unless $record->{node}->type eq 'slider';
-            SendMessageW( $record->{hwnd}, 0x041C, 1, $value );
-            SendMessageW( $record->{hwnd}, 0x041D, 1, $value );
+        elsif ( $prop_name eq 'step' ) {
+            return unless $record->{node}->type eq 'slider' || $record->{node}->type eq 'spin_box';
+            if ( $record->{node}->type eq 'spin_box' ) {
+                $self->_set_spin_accel( $record, $value );
+            }
+            else {
+                SendMessageW( $record->{hwnd}, 0x041C, 1, $value );
+                SendMessageW( $record->{hwnd}, 0x041D, 1, $value );
+            }
         }
-        elsif ( $prop_name eq 'checked' ) {      # checkbox: BM_SETCHECK
-            return unless $record->{node}->type eq 'checkbox';
+        elsif ( $prop_name eq 'checked' ) {
+            return unless $record->{node}->type eq 'checkbox' || $record->{node}->type eq 'toggle_switch';
             SendMessageW( $record->{hwnd}, 0x00F1, $value ? 1 : 0, 0 );
         }
         elsif ( $prop_name eq 'min' || $prop_name eq 'max' ) {
-            return unless $record->{node}->type eq 'slider';
-            my $min = $prop_name eq 'min' ? $value : $record->{node}->min;
-            my $max = $prop_name eq 'max' ? $value : $record->{node}->max;
-            SendMessageW( $record->{hwnd}, 0x0406, 1, ( $max << 16 ) | $min );
+            my $node = $record->{node};
+            return unless $node->type eq 'slider' || $node->type eq 'spin_box';
+            my $min = $prop_name eq 'min' ? $value : $node->min;
+            my $max = $prop_name eq 'max' ? $value : $node->max;
+            if ( $node->type eq 'spin_box' ) {
+                $self->_set_spin_range( $record, $min, $max );
+            }
+            else {
+                SendMessageW( $record->{hwnd}, 0x0406, 1, ( $max << 16 ) | $min );
+            }
         }
     }
 
     method move_widget ( $vnode_id, $x, $y, $w, $h ) {
         my $record = $registry->{$vnode_id};
-
-        #print $lfh "  MOVE id=$vnode_id rec=", ( $record ? sprintf( "hwnd=%s", $record->{hwnd} ) : 'none' ), " xywh=($x,$y,$w,$h)\n";
-        return unless $record && $record->{hwnd};    # containers have no HWND
+        return unless $record && $record->{hwnd};
         SetWindowPos( $record->{hwnd}, undef, $x, $y, $w, $h, 0x0004 );
+        if ( $record->{aux_hwnd} ) {
+            SetWindowPos( $record->{aux_hwnd}, undef, $x + $w - 16, $y, 16, $h, 0x0004 );
+        }
     }
 };
-1;
+1

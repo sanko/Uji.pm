@@ -5,6 +5,7 @@ class Uji::Node::Column v0.0.1 : isa(Uji::Node) {
     field $children : param : reader = [];
     field $padding  : param : reader = 10;
     field $spacing  : param : reader = 10;
+    field $align    : param : reader = 'stretch';    # cross-axis alignment: 'stretch', 'start', 'center', 'end'
     sub _type {'column'}
 };
 1;

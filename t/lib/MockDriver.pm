@@ -10,6 +10,7 @@ class MockDriver {
     field $registry : reader = {};    # id => { hwnd => id, node => $node }
     field $calls    : reader = [];    # [ $method, @args ]
     field $checks   : reader = {};    # id => checked state (0/1)
+    field $values   : reader = {};    # id => value/selection state
     field $mounted  : reader = 0;
     field $vtree;
     #
@@ -43,6 +44,9 @@ class MockDriver {
                 $checks->{ $ch->id } = ( $ch->id eq $selected ) ? 1 : 0;
             }
         }
+        elsif ( $prop eq 'value' || $prop eq 'selection' ) {
+            $values->{$vnode_id} = $value;
+        }
         else {
             $checks->{$vnode_id} = $value;
         }
@@ -58,8 +62,11 @@ class MockDriver {
         $registry->{ $node->id } = { hwnd => $node->id, node => $node };
 
         # Mirror the real driver's initial BM_SETCHECK/BM_SETPOS at mount time.
-        if    ( $node->type eq 'checkbox' ) { $checks->{ $node->id } = $node->checked  ? 1 : 0 }
-        elsif ( $node->type eq 'radio' )    { $checks->{ $node->id } = $node->selected ? 1 : 0 }
+        if    ( $node->type eq 'checkbox' )                           { $checks->{ $node->id } = $node->checked  ? 1 : 0 }
+        elsif ( $node->type eq 'toggle_switch' )                      { $checks->{ $node->id } = $node->checked  ? 1 : 0 }
+        elsif ( $node->type eq 'radio' )                              { $checks->{ $node->id } = $node->selected ? 1 : 0 }
+        elsif ( $node->type eq 'list_box' )                           { $values->{ $node->id } = $node->selection }
+        elsif ( $node->can('value') && $node->type ne 'radio_group' ) { $values->{ $node->id } = $node->value }
         $self->_register($_) for @{ $node->children };
     }
 }
