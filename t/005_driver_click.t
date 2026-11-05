@@ -15,11 +15,11 @@ my $drv  = Uji::Driver::Win32->new;
 $drv->init($chan);
 my $rg = Uji::radio_group(
     value     => 'blue',
-    options   => [ { value => 'red', label => 'Red' }, { value => 'green', label => 'Green' }, { value => 'blue', label => 'Blue' }, ],
-    on_select => sub ($v) { { type => 'SET_COLOR', value => $v } },
+    options   => [ { value => 'red', label => 'Red' }, { value => 'green', label => 'Green' }, { value => 'blue', label => 'Blue' } ],
+    on_select => sub ($v) { { type => 'SET_COLOR', value => $v } }
 );
 my $col = Uji::column(
-    children => [ Uji::checkbox( label => 'Dark mode', checked => 0, on_toggle => sub ($on) { { type => 'TOGGLE_DARK', value => $on } } ), $rg, ], );
+    children => [ Uji::checkbox( label => 'Dark mode', checked => 0, on_toggle => sub ($on) { { type => 'TOGGLE_DARK', value => $on } } ), $rg ] );
 my $vtree = Uji::window( title => 't', w => 360, h => 400, child => $col );
 $drv->mount($vtree);
 my $layout = Uji::Layout->new( driver => $drv );

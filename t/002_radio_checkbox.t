@@ -18,7 +18,7 @@ my $rg = Uji::radio_group(
     value     => 'blue',
     spacing   => 2,
     options   => [ { value => 'red', label => 'Red' }, { value => 'green', label => 'Green' }, { value => 'blue', label => 'Blue' } ],
-    on_select => sub { },
+    on_select => sub { }
 );
 is $rg->type, 'radio_group', 'radio_group type';
 my $kids = $rg->children;

@@ -24,7 +24,7 @@ class Uji::Node::RadioGroup v0.0.1 : isa(Uji::Node) {
                 label     => $opt->{label} // $opt->{value},
                 first     => $first,
                 selected  => ( $opt->{value} eq $value ? 1 : 0 ),
-                on_select => $on_select,
+                on_select => $on_select
                 );
             $first = 0;
         }
