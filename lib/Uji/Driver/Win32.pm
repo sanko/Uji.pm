@@ -62,6 +62,12 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         # Same entry point, but with a marshalled wide-string lParam (combo/list item text).
         affix 'user32', [ 'SendMessageW', 'SendMessageWStr' ], [ Pointer [Void], UInt, Size_t, WString ] => SSize_t;
 
+        # Menus
+        affix 'user32', 'CreateMenu',      []                                        => Pointer [Void];
+        affix 'user32', 'CreatePopupMenu', []                                        => Pointer [Void];
+        affix 'user32', 'AppendMenuW',     [ Pointer [Void], UInt, Size_t, WString ] => Int;
+        affix 'user32', 'SetMenu',         [ Pointer [Void], Pointer [Void] ]        => Int;
+        affix 'user32', 'DrawMenuBar',     [ Pointer [Void] ]                        => Int;
         # Read native control text
         typedef RECT => Struct [ left => Int, top => Int, right => Int, bottom => Int ];
         typedef POINT => Struct [ x => Int, y => Int ];
@@ -451,6 +457,11 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             my ( $nw, $nh ) = $self->_get_client_size($main_hwnd);
             $vtree->set_bounds( 0, 0, $nw, $nh );
         }
+
+        # Boot the menu bar early
+        if ( $vtree->can('menu_bar') && $vtree->menu_bar ) {
+            $self->_mount_menu_bar( $main_hwnd, $vtree->menu_bar );
+        }
         SetWindowPos( $main_hwnd, $vtree->topmost ? -1 : -2, 0, 0, 0, 0, 0x0003 ) if $vtree->topmost;
         ShowWindow( $main_hwnd, $vtree->maximized ? 3 : $vtree->minimized ? 2 : 5 );
         UpdateWindow($main_hwnd);
@@ -471,6 +482,29 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $self->_update_scroll_info($parent_scroll_id);
         }
         RedrawWindow( $parent_hwnd, undef, undef, 0x0185 );
+    }
+
+    method _mount_menu_bar ( $hwnd, $menu_bar_node ) {
+        my $hmenu_bar = CreateMenu();
+        for my $m ( @{ $menu_bar_node->menus } ) {
+            my $hpopup = CreatePopupMenu();
+            for my $item ( @{ $m->items } ) {
+                if ( $item->type eq 'menu_separator' ) {
+                    AppendMenuW( $hpopup, 0x0800, 0, undef );    # MF_SEPARATOR
+                }
+                elsif ( $item->type eq 'menu_item' ) {
+                    $registry->{ $item->id } = { hwnd => undef, node => $item };
+                    my $text  = $item->label . ( $item->shortcut ? "\t" . $item->shortcut : '' );
+                    my $flags = 0x0000;                                                             # MF_STRING
+                    $flags |= 0x0008 if $item->checked;                                             # MF_CHECKED
+                    $flags |= 0x0001 unless $item->enabled;                                         # MF_GRAYED
+                    AppendMenuW( $hpopup, $flags, $item->id, $text );
+                }
+            }
+            AppendMenuW( $hmenu_bar, 0x0010, Affix::address($hpopup), $m->label );                  # MF_POPUP
+        }
+        SetMenu( $hwnd, $hmenu_bar );
+        DrawMenuBar($hwnd);
     }
 
     method destroy_widget ($id) {

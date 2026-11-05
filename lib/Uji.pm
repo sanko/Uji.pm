@@ -2,6 +2,14 @@ use v5.40;
 use experimental 'class';
 #
 package Uji v0.0.1 {
+    use Exporter qw[import];
+    #
+    use Uji::App;
+    use Uji::Driver;
+    use Uji::Layout;
+    use Uji::Reconciler;
+    use Uji::Sub;
+    #
     use Uji::Node;
     use Uji::Node::Button;
     use Uji::Node::Checkbox;
@@ -24,12 +32,10 @@ package Uji v0.0.1 {
     use Uji::Node::ProgressBar;
     use Uji::Node::GroupBox;
     use Uji::Node::ScrollView;
-    use Uji::Layout;
-    use Uji::Driver;
-    use Uji::Reconciler;
-    use Uji::Sub;
-    use Uji::App;
-    use Exporter qw[import];
+    use Uji::Node::Menu;
+    use Uji::Node::MenuBar;
+    use Uji::Node::MenuItem;
+    use Uji::Node::MenuSeparator;
     #
     our %EXPORT_TAGS = (
         all => [
@@ -43,6 +49,7 @@ package Uji v0.0.1 {
                 slider  progress_bar
                 combo_box list_box spin_box date_picker toggle_switch spacer
                 every batch none
+                menu_bar menu menu_item menu_separator
                 ]
         ]
     );
@@ -77,6 +84,12 @@ package Uji v0.0.1 {
     sub every ( $ms, $action, %args ) { Uji::Sub::every( $ms, $action, %args ) }
     sub batch (@subs)                 { Uji::Sub::batch(@subs) }
     sub none () { Uji::Sub::none() }
+
+    # Menus
+    sub menu_bar       (%args) { Uji::Node::MenuBar->new(%args) }
+    sub menu           (%args) { Uji::Node::Menu->new(%args) }
+    sub menu_item      (%args) { Uji::Node::MenuItem->new(%args) }
+    sub menu_separator (%args) { Uji::Node::MenuSeparator->new(%args) }
 };
 #
 1;

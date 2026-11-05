@@ -253,6 +253,7 @@ class Uji::Layout v0.0.1 {
         }
         elsif ( $node->type eq 'scroll_view' ) {
             if ( $node->child ) {
+
                 # In a ScrollView, the content canvas is measured in unconstrained space
                 # Reserve 18px for the native vertical scrollbar
                 my $canvas_avail_w = $w > 18 ? $w - 18 : $w;

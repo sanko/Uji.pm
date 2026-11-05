@@ -96,6 +96,22 @@
          "file" : "lib/Uji/Node/ListBox.pm",
          "version" : "v0.0.1"
       },
+      "Uji::Node::Menu" : {
+         "file" : "lib/Uji/Node/Menu.pm",
+         "version" : "v0.0.1"
+      },
+      "Uji::Node::MenuBar" : {
+         "file" : "lib/Uji/Node/MenuBar.pm",
+         "version" : "v0.0.1"
+      },
+      "Uji::Node::MenuItem" : {
+         "file" : "lib/Uji/Node/MenuItem.pm",
+         "version" : "v0.0.1"
+      },
+      "Uji::Node::MenuSeparator" : {
+         "file" : "lib/Uji/Node/MenuSeparator.pm",
+         "version" : "v0.0.1"
+      },
       "Uji::Node::MultilineText" : {
          "file" : "lib/Uji/Node/MultilineText.pm",
          "version" : "v0.0.1"
