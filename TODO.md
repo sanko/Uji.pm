@@ -10,6 +10,10 @@ native FFI via Affix. This is a testbed for cooperative fibers via Acme::Paratax
 - [x] Background side-effects system (Elm `Cmd`s in dedicated fibers)
 - [x] Declarative Virtual DOM (VDOM) tree representation using `perlclass`
 - [x] Virtual Node Identity preservation & Reconciler diff/patching engine
+  - [x] Keyed child reconciliation (`key => $id`) for stable native control identities
+  - [x] Unkeyed positional fallback reconciliation
+  - [x] Dynamic subtree creation (`mount_widget`) and destruction (`destroy_widget`)
+  - [x] Automatic type replacement if node types change
 - [ ] Subscriptions system (`Sub` for periodic timers, window resize events)
 
 ## Layout Engine
@@ -20,7 +24,7 @@ native FFI via Affix. This is a testbed for cooperative fibers via Acme::Paratax
 - [x] Proportionate flexible sizing (`flex => 1`, `flex => 2`)
 - [ ] **Auto-resize policy** (design decision needed: how widgets size to content & parent)
   - [x] Intrinsic sizing (measure phase: text metrics -> natural width/height)
-  - [ ] Parent-driven resize: re-layout on `WM_SIZE` (already tracked under Windows driver)
+  - [x] Parent-driven resize: re-layout on `WM_SIZE` (already tracked under Windows driver)
   - [ ] Per-widget fit policy (`fill`, `fit`, `stretch`, `shrink`, `fixed`, `min`, `max`)
   - [ ] Constraint/min-max plumbing down the tree
 - [ ] Cross-axis alignment (`stretch`, `center`, `start`, `end`)
@@ -35,19 +39,17 @@ native FFI via Affix. This is a testbed for cooperative fibers via Acme::Paratax
 - [x] `TextInput` (Single-line input with two-way `on_input` binding)
 - [x] `PasswordInput` (Masked single-line text; `EDIT` with `ES_PASSWORD`)
 - [x] `Slider` (Range slider with `on_change` event; Win32 trackbar)
-
-### Core Inputs (all toolkits must support)
-- [ ] `Checkbox` (Toggle box with `on_toggle` event)
-- [ ] `RadioGroup` / `RadioButton` (Exclusive selection; `on_select`)
+- [x] `Checkbox` (Toggle box with `on_toggle` event; `BS_AUTOCHECKBOX`)
+- [x] `ToggleSwitch` (Sticky push toggle style; `BS_PUSHLIKE`)
+- [x] `RadioGroup` / `RadioButton` (Exclusive selection; `on_select`)
   - Win32: `BS_AUTORADIOBUTTON` grouped with `WS_GROUP`
   - GTK4: `GtkCheckButton` inside a shared length-1 group
   - Cocoa: `NSButton` with `NSButtonTypeRadio`
-- [ ] `MultilineText` (Wrapping/scrollable text area; line breaks in `value`)
-- [ ] `ComboBox` (Editable dropdown; `options => [...]`, `on_select`)
-- [ ] `ListBox` (Scrollable list of options; `selection`/`on_select`)
-- [ ] `SpinBox` (Numeric stepper with `min`/`max`/`step`)
-- [ ] `DatePicker` (Calendar-based date entry)
-- [ ] `ToggleSwitch` (2-state on/off, distinct look from checkbox where available)
+- [x] `MultilineText` (Wrapping/scrollable text area; line breaks in `value`)
+- [x] `ComboBox` (Editable dropdown; `options => [...]`, `on_select`)
+- [x] `ListBox` (Scrollable list of options; `selection`/`on_select`)
+- [x] `SpinBox` (Numeric stepper with `min`/`max`/`step`)
+- [x] `DatePicker` (Calendar-based date entry)
 
 ### Buttons & Static Display
 - [ ] `ToggleButton` (Sticky push style, `checked` state)
@@ -93,8 +95,8 @@ native FFI via Affix. This is a testbed for cooperative fibers via Acme::Paratax
   - [x] Event routing via `WM_COMMAND` (`BN_CLICKED`, `EN_CHANGE`) + `WM_HSCROLL`
   - [ ] Standard system font application (replace default bitmap font with Segoe UI)
   - [x] Window resize handling (`WM_SIZE` -> re-layout pass)
-  - [ ] Checkbox / radio button mapping (`BS_AUTOCHECKBOX`, `BS_AUTORADIOBUTTON`)
-  - [ ] Combo/list box mapping (`CB_`, `LB_` messages, `WM_COMMAND` notifications)
+  - [x] Checkbox / radio button mapping (`BS_AUTOCHECKBOX`, `BS_AUTORADIOBUTTON`)
+  - [x] Combo/list box mapping (`CB_`, `LB_` messages, `WM_COMMAND` notifications)
   - [ ] Native dialogs (`GetOpenFileNameW`, `MessageBoxW`)
 - [ ] **Linux (GTK4)**
   - [ ] GLib non-blocking iteration (`g_main_context_iteration`)
