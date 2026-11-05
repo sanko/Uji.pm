@@ -83,6 +83,9 @@ provides:
   Uji::Node::Row:
     file: lib/Uji/Node/Row.pm
     version: v0.0.1
+  Uji::Node::ScrollView:
+    file: lib/Uji/Node/ScrollView.pm
+    version: v0.0.1
   Uji::Node::Slider:
     file: lib/Uji/Node/Slider.pm
     version: v0.0.1

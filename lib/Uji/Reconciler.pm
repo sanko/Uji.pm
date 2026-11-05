@@ -150,7 +150,19 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
                 $driver->set_prop( $new_node->id, 'topmost', $new_node->topmost );
             }
         }
-        for my $p (qw[ minimized maximized ]) {
+
+        # Check scroll_y / scroll_x (ScrollView)
+        if ( $old_node->can('scroll_y') && $new_node->can('scroll_y') ) {
+            if ( ( $old_node->scroll_y // 0 ) != ( $new_node->scroll_y // 0 ) ) {
+                $driver->set_prop( $new_node->id, 'scroll_y', $new_node->scroll_y );
+            }
+        }
+        if ( $old_node->can('scroll_x') && $new_node->can('scroll_x') ) {
+            if ( ( $old_node->scroll_x // 0 ) != ( $new_node->scroll_x // 0 ) ) {
+                $driver->set_prop( $new_node->id, 'scroll_x', $new_node->scroll_x );
+            }
+        }
+        for my $p (qw[minimized maximized]) {
             if ( $old_node->can($p) && $new_node->can($p) ) {
                 if ( ( $old_node->$p // 0 ) != ( $new_node->$p // 0 ) ) {
                     $driver->set_prop( $new_node->id, $p, $new_node->$p );

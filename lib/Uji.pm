@@ -23,6 +23,7 @@ package Uji v0.0.1 {
     use Uji::Node::Window;
     use Uji::Node::ProgressBar;
     use Uji::Node::GroupBox;
+    use Uji::Node::ScrollView;
     use Uji::Layout;
     use Uji::Driver;
     use Uji::Reconciler;
@@ -33,7 +34,7 @@ package Uji v0.0.1 {
         all => [
             our @EXPORT
                 = qw[
-                app window  group_box
+                app window  group_box scroll_view
                 column row
                 text   text_input password multiline_text
                 button
@@ -62,6 +63,7 @@ package Uji v0.0.1 {
     sub toggle_switch  (%args)           { Uji::Node::ToggleSwitch->new(%args) }
     sub group_box      (%args)           { Uji::Node::GroupBox->new(%args) }
     sub progress_bar   (%args)           { Uji::Node::ProgressBar->new(%args) }
+    sub scroll_view    (%args)           { Uji::Node::ScrollView->new(%args) }
 
     sub spacer (%args) {
         $args{flex} //= 1 unless defined $args{w} || defined $args{h};

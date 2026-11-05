@@ -7,11 +7,41 @@ class Uji::Layout v0.0.1 {
     method _intrinsic ($node) {
         my $t = $node->type;
 
-        # Flexible whitespace: reserve its min_w (or 20px if flexible) so auto-sizing allocates space
+        # Flexible whitespace has 0 intrinsic size (or explicit fixed w/h)
         if ( $t eq 'spacer' ) {
             my $w = $node->w || $node->min_w || ( $node->flex > 0 ? 20 : 0 );
             my $h = $node->h || $node->min_h || 0;
             return ( $w, $h );
+        }
+
+        # ScrollView viewport: uses explicit w/h if given, or standard viewport fallback
+        if ( $t eq 'scroll_view' ) {
+            my $w = $node->w || 320;
+            my $h = $node->h || 240;
+            return ( $w, $h );
+        }
+
+        # GroupBox container: frame + child content + title
+        if ( $t eq 'group_box' ) {
+            my $pad     = $node->padding;
+            my $top_pad = $pad + 12;            # extra headroom for the etched title text
+            my $label   = $node->label // '';
+            my ( $lw, $lh ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
+            my ( $cw, $ch ) = ( 0, 0 );
+            if ( $node->child ) {
+                ( $cw, $ch ) = $self->_intrinsic( $node->child );
+                $cw = $node->child->w if $node->child->w;
+                $ch = $node->child->h if $node->child->h;
+            }
+            my $min_title_w = $lw + 32;
+            my $w           = ( $cw > $min_title_w ? $cw : $min_title_w ) + ( $pad * 2 );
+            my $h           = $ch + $top_pad + $pad;
+            return ( $w, $h );
+        }
+
+        # Progress bar: standard bar width / height
+        if ( $t eq 'progress_bar' ) {
+            return ( 160, 20 );
         }
 
         # Static text label: measure text with headroom for ascenders/descenders
@@ -25,25 +55,21 @@ class Uji::Layout v0.0.1 {
                 my ( $lw, $lh )
                     = $driver && $driver->can('measure_text') ? $driver->measure_text( length($line) ? $line : ' ' ) : ( length($line) * 8, 16 );
                 $max_w = $lw if $lw > $max_w;
-
-                # Provide vertical headroom (font cell + leading) so descenders/ascenders aren't cut
                 $total_h += ( $lh < 16 ? 16 : $lh ) + 4;
             }
-
-            # Add horizontal breathing margin and ensure comfortable line height
             $max_w += 4;
             $total_h = 20 if $total_h < 20;
             return ( $max_w, $total_h );
         }
 
-        # Push button: text metrics + bevel padding with standard minimum width
+        # Push button: text metrics + button chrome margins with standard min width
         if ( $t eq 'button' ) {
             my $label = $node->label // '';
             my ( $tw, $th ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
-            $tw += 28;                             # horizontal padding for push button bevel
-            $tw = 60 if $tw < 60;                  # standard minimum button width
-            $th = ( $th < 16 ? 16 : $th ) + 10;    # vertical padding
-            $th = 26 if $th < 26;                  # standard minimum button height
+            $tw += 28;
+            $tw = 60 if $tw < 60;
+            $th = ( $th < 16 ? 16 : $th ) + 10;
+            $th = 26 if $th < 26;
             return ( $tw, $th );
         }
 
@@ -51,9 +77,9 @@ class Uji::Layout v0.0.1 {
         if ( $t eq 'checkbox' || $t eq 'radio' ) {
             my $label = $node->label // '';
             my ( $tw, $th ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
-            $tw += 28;                             # check square / radio glyph + label gap
+            $tw += 28;
             $th = ( $th < 16 ? 16 : $th ) + 6;
-            $th = 22 if $th < 22;                  # standard check box height to avoid clipping glyph
+            $th = 22 if $th < 22;
             return ( $tw, $th );
         }
 
@@ -72,7 +98,7 @@ class Uji::Layout v0.0.1 {
             my $val = $node->value // '';
             my $tw  = length $val ? ( $driver && $driver->can('measure_text') ? ( $driver->measure_text($val) )[0] : length($val) * 8 ) : 80;
             $tw += 20;
-            return ( $tw < 120 ? 120 : $tw, 24 );    # standard 24px height for single-line EDIT
+            return ( $tw < 120 ? 120 : $tw, 24 );
         }
 
         # Multi-line text area
@@ -178,38 +204,12 @@ class Uji::Layout v0.0.1 {
             my $h = $max_h + ( $pad * 2 );
             return ( $w, $h );
         }
-
-        # GroupBox container: frame + child content + title
-        if ( $t eq 'group_box' ) {
-            my $pad     = $node->padding;
-            my $top_pad = $pad + 12;            # extra headroom for the etched title text
-            my $label   = $node->label // '';
-            my ( $lw, $lh ) = $driver && $driver->can('measure_text') ? $driver->measure_text($label) : ( length($label) * 8, 16 );
-            my ( $cw, $ch ) = ( 0, 0 );
-            if ( $node->child ) {
-                ( $cw, $ch ) = $self->_intrinsic( $node->child );
-                $cw = $node->child->w if $node->child->w;
-                $ch = $node->child->h if $node->child->h;
-            }
-            my $min_title_w = $lw + 32;
-            my $w           = ( $cw > $min_title_w ? $cw : $min_title_w ) + ( $pad * 2 );
-            my $h           = $ch + $top_pad + $pad;
-            return ( $w, $h );
-        }
-
-        # Progress bar: standard bar width / height
-        if ( $t eq 'progress_bar' ) {
-            return ( 160, 20 );
-        }
         return ( 100, 30 );
     }
 
     method compute ( $node, $start_x = 0, $start_y = 0, $avail_w = 800, $avail_h = 600 ) {
         my ( $w, $h );
         if ( $node->type eq 'window' ) {
-
-            # Window node: size is the measured client area.
-            # If not yet set via set_bounds(), derive from intrinsic content size or fall back to avail_w/avail_h.
             if ( $node->bw && $node->bh ) {
                 $w = $node->bw;
                 $h = $node->bh;
@@ -225,13 +225,7 @@ class Uji::Layout v0.0.1 {
             }
         }
         else {
-            # For non-window nodes:
-            # 1. Width: explicit width if requested; otherwise use available width
             $w = $node->w || $avail_w;
-
-            # 2. Height: explicit height if requested;
-            # Containers (Column/Row) take available height if constrained, otherwise shrink to content;
-            # Leaf widgets shrink to their intrinsic content height.
             if ( $node->h ) {
                 $h = $node->h;
             }
@@ -246,17 +240,28 @@ class Uji::Layout v0.0.1 {
             }
         }
 
-        # Apply min/max constraints to the computed geometry
+        # Apply min/max constraints to the computed viewport geometry
         ( $w, $h ) = $node->clamp_size( $w, $h );
         $node->set_bounds( $start_x, $start_y, $w, $h );
         if ( $node->type eq 'window' ) {
             $self->compute( $node->child, 0, 0, $w, $h ) if $node->child;
         }
-        elsif ( $node->type eq 'column' || $node->type eq 'radio_group' ) {
-            $self->_layout_flex( $node, 'vertical', $start_x, $start_y, $w, $h );
-        }
-        elsif ( $node->type eq 'row' ) {
-            $self->_layout_flex( $node, 'horizontal', $start_x, $start_y, $w, $h );
+        elsif ( $node->type eq 'scroll_view' ) {
+            if ( $node->child ) {
+
+                # In a ScrollView, the content canvas is measured in unconstrained space
+                # Reserve 18px for the native vertical scrollbar
+                my $canvas_avail_w = $w > 18 ? $w - 18 : $w;
+                my ( $cw, $ch ) = $self->_intrinsic( $node->child );
+                $cw = $node->child->w if $node->child->w;
+                $cw = $canvas_avail_w if $cw < $canvas_avail_w;
+                $ch = $node->child->h if $node->child->h;
+                $ch = $h              if $ch < $h;
+                $node->set_content_size( $cw, $ch );
+
+                # Origin resets to (0, 0) for children inside the ScrollView
+                $self->compute( $node->child, 0, 0, $cw, $ch );
+            }
         }
         elsif ( $node->type eq 'group_box' ) {
             if ( $node->child ) {
@@ -270,6 +275,12 @@ class Uji::Layout v0.0.1 {
                 $inner_h = 0 if $inner_h < 0;
                 $self->compute( $node->child, $inner_x, $inner_y, $inner_w, $inner_h );
             }
+        }
+        elsif ( $node->type eq 'column' || $node->type eq 'radio_group' ) {
+            $self->_layout_flex( $node, 'vertical', $start_x, $start_y, $w, $h );
+        }
+        elsif ( $node->type eq 'row' ) {
+            $self->_layout_flex( $node, 'horizontal', $start_x, $start_y, $w, $h );
         }
     }
 
@@ -289,7 +300,7 @@ class Uji::Layout v0.0.1 {
         my $main_avail = ( $is_col ? $inner_h : $inner_w ) - ( ( @$children - 1 ) * $spc );
         my $total_flex = 0;
         my $used_fixed = 0;
-        my %nat;    # cached intrinsic sizes [ nw, nh ]
+        my %nat;
 
         for my $child (@$children) {
             my $flx = $child->flex;
@@ -312,13 +323,9 @@ class Uji::Layout v0.0.1 {
             my ( $nw, $nh ) = @{ $nat{ $child->id } };
             my $child_align = $child->align_self // $align;
             if ($is_col) {
-
-                # Column: main axis is vertical (Height / Y), cross axis is horizontal (Width / X)
                 my $target_h = $flx > 0 ? int( ( $flx / $total_flex ) * $remain ) : ( $child->h || $nh );
                 $target_h = $child->min_h if $child->min_h && $target_h < $child->min_h;
                 $target_h = $child->max_h if $child->max_h && $target_h > $child->max_h;
-
-                # Cross-axis width
                 my $target_w;
                 if ( $child->w ) {
                     $target_w = $child->w;
@@ -332,8 +339,6 @@ class Uji::Layout v0.0.1 {
                 $target_w = $child->min_w if $child->min_w        && $target_w < $child->min_w;
                 $target_w = $child->max_w if $child->max_w        && $target_w > $child->max_w;
                 $target_w = $inner_w      if $target_w > $inner_w && $inner_w > 0;
-
-                # Cross-axis X positioning
                 my $child_x = $cx;
                 if ( $child_align eq 'center' ) {
                     $child_x = $cx + int( ( $inner_w - $target_w ) / 2 );
@@ -345,12 +350,9 @@ class Uji::Layout v0.0.1 {
                 $cy += $target_h + $spc;
             }
             else {
-                # Row: main axis is horizontal (Width / X), cross axis is vertical (Height / Y)
                 my $target_w = $flx > 0 ? int( ( $flx / $total_flex ) * $remain ) : ( $child->w || $nw );
                 $target_w = $child->min_w if $child->min_w && $target_w < $child->min_w;
                 $target_w = $child->max_w if $child->max_w && $target_w > $child->max_w;
-
-                # Cross-axis height
                 my $target_h;
                 if ( $child->h ) {
                     $target_h = $child->h;
@@ -364,8 +366,6 @@ class Uji::Layout v0.0.1 {
                 $target_h = $child->min_h if $child->min_h        && $target_h < $child->min_h;
                 $target_h = $child->max_h if $child->max_h        && $target_h > $child->max_h;
                 $target_h = $inner_h      if $target_h > $inner_h && $inner_h > 0;
-
-                # Cross-axis Y positioning
                 my $child_y = $cy;
                 if ( $child_align eq 'center' ) {
                     $child_y = $cy + int( ( $inner_h - $target_h ) / 2 );

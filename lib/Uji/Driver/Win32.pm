@@ -49,9 +49,15 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'user32', 'InvalidateRect',   [ Pointer [Void], Pointer [Void], Int ]                      => Int;
         affix 'user32', 'LoadCursorW',      [ Pointer [Void], Size_t ]                                   => Pointer [Void];
         affix 'user32', 'GetSystemMetrics', [Int]                                                        => Int;
+        affix 'user32', 'SendMessageW',     [ Pointer [Void], UInt, Size_t, SSize_t ]                    => SSize_t;
         affix 'user32', 'GetWindowLongW',   [ Pointer [Void], Int ]                                      => Int;
         affix 'user32', 'SetWindowLongW',   [ Pointer [Void], Int, Int ]                                 => Int;
-        affix 'user32', 'SendMessageW',     [ Pointer [Void], UInt, Size_t, SSize_t ]                    => SSize_t;
+
+        # Atomic multi-window positioning & redrawing
+        affix 'user32', 'BeginDeferWindowPos', [Int]                                                                        => Pointer [Void];
+        affix 'user32', 'DeferWindowPos',      [ Pointer [Void], Pointer [Void], Pointer [Void], Int, Int, Int, Int, UInt ] => Pointer [Void];
+        affix 'user32', 'EndDeferWindowPos',   [ Pointer [Void] ]                                                           => Int;
+        affix 'user32', 'RedrawWindow',        [ Pointer [Void], Pointer [Void], Pointer [Void], UInt ]                     => Int;
 
         # Same entry point, but with a marshalled wide-string lParam (combo/list item text).
         affix 'user32', [ 'SendMessageW', 'SendMessageWStr' ], [ Pointer [Void], UInt, Size_t, WString ] => SSize_t;
@@ -85,11 +91,14 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             lParam     => SSize_t,
             lpReserved => Pointer [Void]
         ];
-        affix 'user32', 'GetWindowTextLengthW', [ Pointer [Void] ]                      => Int;
-        affix 'user32', 'GetWindowTextW',       [ Pointer [Void], Pointer [Void], Int ] => Int;
-        affix 'user32', 'GetClientRect',        [ Pointer [Void], Pointer [Void] ]      => Int;
-        affix 'user32', 'GetWindowRect',        [ Pointer [Void], Pointer [Void] ]      => Int;
-        affix 'user32', 'AdjustWindowRectEx',   [ Pointer [ RECT() ], UInt, Int, UInt ] => Int;
+        typedef SCROLLINFO => Struct [ cbSize => UInt, fMask => UInt, nMin => Int, nMax => Int, nPage => UInt, nPos => Int, nTrackPos => Int ];
+        affix 'user32', 'SetScrollInfo',        [ Pointer [Void], Int, Pointer [ SCROLLINFO() ], Int ] => Int;
+        affix 'user32', 'GetScrollInfo',        [ Pointer [Void], Int, Pointer [ SCROLLINFO() ] ]      => Int;
+        affix 'user32', 'GetWindowTextLengthW', [ Pointer [Void] ]                                     => Int;
+        affix 'user32', 'GetWindowTextW',       [ Pointer [Void], Pointer [Void], Int ]                => Int;
+        affix 'user32', 'GetClientRect',        [ Pointer [Void], Pointer [Void] ]                     => Int;
+        affix 'user32', 'GetWindowRect',        [ Pointer [Void], Pointer [Void] ]                     => Int;
+        affix 'user32', 'AdjustWindowRectEx',   [ Pointer [ RECT() ], UInt, Int, UInt ]                => Int;
 
         # Text metrics for intrinsic sizing (measure natural widget size)
         affix 'user32', 'GetDC',                 [ Pointer [Void] ]                               => Pointer [Void];
@@ -123,7 +132,12 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         $channel = $app_channel;
         my $self_ref = $self;
         $wndproc_cb = sub ( $hwnd, $msg, $wparam, $lparam ) {
-            if ( $msg == 0x0111 ) {    # WM_COMMAND
+
+            # Paint background behind static text and checkboxes so labels don't smear
+            if ( $msg == 0x0138 || $msg == 0x0135 ) {    # WM_CTLCOLORSTATIC / WM_CTLCOLORBTN
+                return 6;                                # HBRUSH for COLOR_WINDOW + 1
+            }
+            if ( $msg == 0x0111 ) {                      # WM_COMMAND
                 my $control_id  = $wparam & 0xFFFF;
                 my $notify_code = ( $wparam >> 16 ) & 0xFFFF;
                 my $record      = $self_ref->_get_registry_record($control_id);
@@ -210,34 +224,62 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                     }
                 }
             }
-            elsif ( $msg == 0x0002 ) {    # WM_DESTROY -> main window closed; signal application termination
-                $self_ref->channel->put( { type => 'QUIT' } );
+            elsif ( $msg == 0x0115 ) {    # WM_VSCROLL -> ScrollView vertical scroll
+                my $record = $self_ref->_get_registry_by_hwnd($hwnd);
+                if ( $record && $record->{node}->type eq 'scroll_view' ) {
+                    $self_ref->_handle_vscroll( $record, $wparam );
+                    return 0;
+                }
             }
-            elsif ( $msg == 0x0005 ) {    # WM_SIZE -> window was resized; re-layout
-                my $cw = $lparam & 0xFFFF;
-                my $ch = ( $lparam >> 16 ) & 0xFFFF;
-                $self_ref->channel->put( { type => 'RESIZE' } );
-                my $cb = $self_ref->_get_resize_handler;
-                $cb->( $cw, $ch ) if $cb;
+            elsif ( $msg == 0x020A ) {    # WM_MOUSEWHEEL -> forward mousewheel to scrollview
+                $self_ref->_handle_mousewheel( $hwnd, $wparam );
+                return 0;
             }
-            elsif ( $msg == 0x0024 ) {    # WM_GETMINMAXINFO -> clamp window track sizes
-                my $vn = $self_ref->main_vnode;
-                if ($vn) {
-                    my $mmi = cast( $lparam, MINMAXINFO() );
-                    my ( $min_w, $min_h ) = ( $vn->min_w, $vn->min_h );
-                    my ( $max_w, $max_h ) = ( $vn->max_w, $vn->max_h );
-                    if ( $min_w || $min_h || $max_w || $max_h ) {
-                        if ( $min_w || $min_h ) {
-                            my ( $ow, $oh ) = $self_ref->_frame_size_for_client( $min_w || 1, $min_h || 1 );
-                            $mmi->{ptMinTrackSize}{x} = $ow if $min_w;
-                            $mmi->{ptMinTrackSize}{y} = $oh if $min_h;
+            elsif ( $msg == 0x0002 ) {    # WM_DESTROY -> only quit if the root main window is destroyed
+                if ( defined $main_hwnd && Affix::address($hwnd) == $main_hwnd ) {
+                    $self_ref->channel->put( { type => 'QUIT' } );
+                }
+            }
+            elsif ( $msg == 0x0005 ) {    # WM_SIZE -> window was resized
+                my $addr = Affix::address($hwnd);
+                if ( defined $main_hwnd && $addr == $main_hwnd ) {
+
+                    # Only the top-level window triggers root layout recomputation
+                    my $cw = $lparam & 0xFFFF;
+                    my $ch = ( $lparam >> 16 ) & 0xFFFF;
+                    $self_ref->channel->put( { type => 'RESIZE' } );
+                    my $cb = $self_ref->_get_resize_handler;
+                    $cb->( $cw, $ch ) if $cb;
+                }
+                else {
+                    # Child sub-window (ScrollView) was resized; refresh its scrollbar metrics
+                    my $rec = $self_ref->_get_registry_by_hwnd($hwnd);
+                    if ( $rec && $rec->{node}->type eq 'scroll_view' ) {
+                        $self_ref->_update_scroll_info( $rec->{node}->id );
+                    }
+                }
+            }
+            elsif ( $msg == 0x0024 ) {    # WM_GETMINMAXINFO -> clamp main window track sizes
+                my $addr = Affix::address($hwnd);
+                if ( defined $main_hwnd && $addr == $main_hwnd ) {
+                    my $vn = $self_ref->main_vnode;
+                    if ($vn) {
+                        my $mmi = cast( $lparam, MINMAXINFO() );
+                        my ( $min_w, $min_h ) = ( $vn->min_w, $vn->min_h );
+                        my ( $max_w, $max_h ) = ( $vn->max_w, $vn->max_h );
+                        if ( $min_w || $min_h || $max_w || $max_h ) {
+                            if ( $min_w || $min_h ) {
+                                my ( $ow, $oh ) = $self_ref->_frame_size_for_client( $min_w || 1, $min_h || 1 );
+                                $mmi->{ptMinTrackSize}{x} = $ow if $min_w;
+                                $mmi->{ptMinTrackSize}{y} = $oh if $min_h;
+                            }
+                            if ( $max_w || $max_h ) {
+                                my ( $ow, $oh ) = $self_ref->_frame_size_for_client( $max_w || 1, $max_h || 1 );
+                                $mmi->{ptMaxTrackSize}{x} = $ow if $max_w;
+                                $mmi->{ptMaxTrackSize}{y} = $oh if $max_h;
+                            }
+                            return 0;
                         }
-                        if ( $max_w || $max_h ) {
-                            my ( $ow, $oh ) = $self_ref->_frame_size_for_client( $max_w || 1, $max_h || 1 );
-                            $mmi->{ptMaxTrackSize}{x} = $ow if $max_w;
-                            $mmi->{ptMaxTrackSize}{y} = $oh if $max_h;
-                        }
-                        return 0;
                     }
                 }
                 return DefWindowProcW( $hwnd, $msg, $wparam, $lparam );
@@ -282,11 +324,12 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     method _get_registry_record ($id) { $registry->{$id} }
 
     method _get_registry_by_hwnd ($hwnd) {
+        my $addr = Affix::address($hwnd);
         for my $id ( keys %$registry ) {
             my $rec = $registry->{$id};
             next unless defined $rec->{hwnd};
-            return $rec if $rec->{hwnd} == $hwnd;
-            return $rec if defined $rec->{aux_hwnd} && $rec->{aux_hwnd} == $hwnd;
+            return $rec if Affix::address( $rec->{hwnd} ) == $addr;
+            return $rec if defined $rec->{aux_hwnd} && Affix::address( $rec->{aux_hwnd} ) == $addr;
         }
         return undef;
     }
@@ -382,8 +425,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         if ( ( !$vtree->w || !$vtree->h ) && $vtree->child ) {
             my $temp_layout = Uji::Layout->new( driver => $self );
             my ( $iw, $ih ) = $temp_layout->_intrinsic( $vtree->child );
-            $req_cw = $vtree->w || ( $iw < 320 ? 320 : $iw );
-            $req_ch = $vtree->h || ( $ih < 180 ? 180 : $ih );
+            $req_cw = $vtree->w || ( $iw < 360 ? 360 : $iw );
+            $req_ch = $vtree->h || ( $ih < 220 ? 220 : $ih );
         }
         else {
             $req_cw = $vtree->w || 640;
@@ -504,7 +547,12 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     }
 
     method mount_children ($vtree) {
-        $self->_mount_node( $vtree->child, $main_hwnd ) if $vtree->child;
+        if ( $vtree->child ) {
+            $self->_mount_node( $vtree->child, $main_hwnd );
+
+            # Force all child windows and sub-views to paint synchronously on startup
+            RedrawWindow( $main_hwnd, undef, undef, 0x0185 );
+        }
     }
 
     method _get_client_size ($hwnd) {
@@ -540,12 +588,167 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         free($msg_ptr);
     }
 
-    method _mount_node ( $vnode, $parent_hwnd ) {
+    method _update_scroll_info ($vnode_id) {
+        my $record = $registry->{$vnode_id};
+        return unless $record && $record->{hwnd};
+        my $node       = $record->{node};
+        my $viewport_h = $node->bh;
+        my $content_h  = $node->content_h || $viewport_h;
+        my $sptr       = malloc( sizeof( SCROLLINFO() ) );
+        my $si         = cast( $sptr, SCROLLINFO() );
+        $si->{cbSize} = sizeof( SCROLLINFO() );
+        $si->{fMask}  = 0x0001 | 0x0002 | 0x0004;         # SIF_RANGE | SIF_PAGE | SIF_POS
+        $si->{nMin}   = 0;
+        $si->{nMax}   = $content_h;
+        $si->{nPage}  = $viewport_h;
+        $si->{nPos}   = $record->{scroll_y} // 0;
+        SetScrollInfo( $record->{hwnd}, 1, $sptr, 1 );    # 1 = SB_VERT
+        free($sptr);
+    }
+
+    method _handle_vscroll ( $record, $wparam ) {
+        my $action      = $wparam & 0xFFFF;
+        my $scroll_hwnd = $record->{hwnd};
+        my $sptr        = malloc( sizeof( SCROLLINFO() ) );
+        my $si          = cast( $sptr, SCROLLINFO() );
+        $si->{cbSize} = sizeof( SCROLLINFO() );
+        $si->{fMask}  = 0x0017;                                                    # SIF_ALL
+        GetScrollInfo( $scroll_hwnd, 1, $sptr );
+        my $cur_pos = $si->{nPos};
+        my $new_pos = $cur_pos;
+        my $page    = $si->{nPage};
+        my $max_pos = $si->{nMax} - $page + 1;
+        $max_pos = 0 if $max_pos < 0;
+        if    ( $action == 0 )                 { $new_pos -= 26; }                 # SB_LINEUP
+        elsif ( $action == 1 )                 { $new_pos += 26; }                 # SB_LINEDOWN
+        elsif ( $action == 2 )                 { $new_pos -= $page; }              # SB_PAGEUP
+        elsif ( $action == 3 )                 { $new_pos += $page; }              # SB_PAGEDOWN
+        elsif ( $action == 4 || $action == 5 ) { $new_pos = $si->{nTrackPos}; }    # SB_THUMBPOSITION / SB_THUMBTRACK
+        elsif ( $action == 6 )                 { $new_pos = $si->{nMin}; }         # SB_TOP
+        elsif ( $action == 7 )                 { $new_pos = $max_pos; }            # SB_BOTTOM
+        $new_pos = $si->{nMin} if $new_pos < $si->{nMin};
+        $new_pos = $max_pos    if $new_pos > $max_pos;
+        free($sptr);
+
+        if ( $new_pos != $cur_pos ) {
+            $self->_scroll_to_y( $record, $new_pos );
+        }
+    }
+
+    method _handle_mousewheel ( $hwnd, $wparam ) {
+        my $target_rec = $self->_get_registry_by_hwnd($hwnd);
+        if ( $target_rec && $target_rec->{parent_scroll_id} ) {
+            $target_rec = $self->_get_registry_record( $target_rec->{parent_scroll_id} );
+        }
+        unless ( $target_rec && $target_rec->{node}->type eq 'scroll_view' ) {
+            for my $id ( keys %$registry ) {
+                my $r = $registry->{$id};
+                if ( $r->{node}->type eq 'scroll_view' ) {
+                    $target_rec = $r;
+                    last;
+                }
+            }
+        }
+        return unless $target_rec && $target_rec->{node}->type eq 'scroll_view';
+        my $delta = ( $wparam >> 16 ) & 0xFFFF;
+        $delta = $delta - 0x10000 if $delta > 0x7FFF;
+        my $step    = int( ( $delta / 120 ) * 38 );
+        my $cur_y   = $target_rec->{scroll_y} // 0;
+        my $new_y   = $cur_y - $step;
+        my $node    = $target_rec->{node};
+        my $max_pos = ( $node->content_h || $node->bh ) - $node->bh;
+        $max_pos = 0        if $max_pos < 0;
+        $new_y   = 0        if $new_y < 0;
+        $new_y   = $max_pos if $new_y > $max_pos;
+        $self->_scroll_to_y( $target_rec, $new_y ) if $new_y != $cur_y;
+    }
+
+    method _scroll_to_y ( $record, $new_y ) {
+        my $old_y = $record->{scroll_y} // 0;
+        return if $new_y == $old_y;
+        $record->{scroll_y} = $new_y;
+        my $sptr = malloc( sizeof( SCROLLINFO() ) );
+        my $si   = cast( $sptr, SCROLLINFO() );
+        $si->{cbSize} = sizeof( SCROLLINFO() );
+        $si->{fMask}  = 0x0004;                   # SIF_POS
+        $si->{nPos}   = $new_y;
+        SetScrollInfo( $record->{hwnd}, 1, $sptr, 1 );
+        free($sptr);
+        $self->_reposition_scroll_children($record);
+        my $node = $record->{node};
+
+        if ( $node->can('on_scroll') && $node->on_scroll ) {
+            my $msg = $node->on_scroll->( $record->{scroll_x} // 0, $new_y );
+            $channel->put($msg) if $msg;
+        }
+    }
+
+    method _reposition_scroll_children ($record) {
+        my $pid = $record->{node}->id;
+        my $sy  = $record->{scroll_y} // 0;
+        my $sx  = $record->{scroll_x} // 0;
+        my @children;
+        for my $id ( keys %$registry ) {
+            my $rec = $registry->{$id};
+            next unless $rec->{parent_scroll_id} && $rec->{parent_scroll_id} == $pid;
+            next unless $rec->{hwnd};
+            push @children, $rec;
+        }
+        if (@children) {
+            my $hdwp = BeginDeferWindowPos( scalar(@children) * 2 );
+            if ($hdwp) {
+                for my $rec (@children) {
+                    my $n     = $rec->{node};
+                    my $flags = 0x0004 | 0x0010 | 0x0100;    # SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS
+                    $hdwp = DeferWindowPos( $hdwp, $rec->{hwnd}, undef, $n->bx - $sx, $n->by - $sy, $n->bw, $n->bh, $flags );
+                    if ( $rec->{aux_hwnd} && $hdwp ) {
+                        $hdwp = DeferWindowPos( $hdwp, $rec->{aux_hwnd}, undef, ( $n->bx + $n->bw - 16 ) - $sx, $n->by - $sy, 16, $n->bh, $flags );
+                    }
+                }
+                EndDeferWindowPos($hdwp) if $hdwp;
+            }
+            else {
+                for my $rec (@children) {
+                    my $n     = $rec->{node};
+                    my $flags = 0x0004 | 0x0010 | 0x0100;
+                    SetWindowPos( $rec->{hwnd}, undef, $n->bx - $sx, $n->by - $sy, $n->bw, $n->bh, $flags );
+                    if ( $rec->{aux_hwnd} ) {
+                        SetWindowPos( $rec->{aux_hwnd}, undef, ( $n->bx + $n->bw - 16 ) - $sx, $n->by - $sy, 16, $n->bh, $flags );
+                    }
+                }
+            }
+        }
+
+        # Redraw the entire scrollview canvas and all children synchronously
+        RedrawWindow( $record->{hwnd}, undef, undef, 0x0185 );
+    }
+
+    method _mount_node ( $vnode, $parent_hwnd, $parent_scroll_id = undef ) {
         if ( $vnode->type eq 'spacer' ) {
             return;
         }
         if ( $vnode->type eq 'spin_box' ) {
-            $self->_mount_spin_box( $vnode, $parent_hwnd );
+            $self->_mount_spin_box( $vnode, $parent_hwnd, $parent_scroll_id );
+            return;
+        }
+
+        # ScrollView container: sub-window with WS_CLIPCHILDREN
+        if ( $vnode->type eq 'scroll_view' ) {
+            my $style = 0x52200000 | 0x00800000;    # WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_VSCROLL | WS_BORDER
+            my $hwnd  = CreateWindowExW( 0, 'UjiWindowClass', undef, $style, $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id,
+                undef, undef );
+            $registry->{ $vnode->id } = {
+                hwnd             => $hwnd,
+                node             => $vnode,
+                parent_hwnd      => $parent_hwnd,
+                parent_scroll_id => $parent_scroll_id,
+                scroll_y         => $vnode->scroll_y // 0,
+                scroll_x         => $vnode->scroll_x // 0
+            };
+            $self->_update_scroll_info( $vnode->id );
+            if ( $vnode->child ) {
+                $self->_mount_node( $vnode->child, $hwnd, $vnode->id );
+            }
             return;
         }
         my ( $class, $style, $initial_text );
@@ -617,15 +820,22 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $style = 0x50000000 | ( $vnode->indeterminate ? 0x0008 : 0 );
         }
         else {
-            $self->_mount_node( $_, $parent_hwnd ) for @{ $vnode->children };
-            $registry->{ $vnode->id } = { hwnd => undef, node => $vnode } if $vnode->type eq 'radio_group';
+            $self->_mount_node( $_, $parent_hwnd, $parent_scroll_id ) for @{ $vnode->children };
+            $registry->{ $vnode->id } = { hwnd => undef, node => $vnode, parent_scroll_id => $parent_scroll_id } if $vnode->type eq 'radio_group';
             return;
         }
-        my $hwnd = CreateWindowExW( 0, $class, $initial_text, $style, $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef,
-            undef );
-        $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode };
-
-        # Apply standard modern GUI font to newly created control
+        my $init_x = $vnode->bx;
+        my $init_y = $vnode->by;
+        if ($parent_scroll_id) {
+            my $prec = $registry->{$parent_scroll_id};
+            if ($prec) {
+                $init_x -= ( $prec->{scroll_x} // 0 );
+                $init_y -= ( $prec->{scroll_y} // 0 );
+            }
+        }
+        my $hwnd
+            = CreateWindowExW( 0, $class, $initial_text, $style, $init_x, $init_y, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef, undef );
+        $registry->{ $vnode->id } = { hwnd => $hwnd, node => $vnode, parent_hwnd => $parent_hwnd, parent_scroll_id => $parent_scroll_id };
         $self->_apply_font($hwnd);
         EnableWindow( $hwnd, $vnode->enabled ? 1 : 0 );
         ShowWindow( $hwnd, $vnode->visible   ? 5 : 0 );
@@ -674,24 +884,31 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
 
         # If it's a group box, mount its inner children after creating the group box HWND
         if ( $vnode->type eq 'group_box' && $vnode->child ) {
-            $self->_mount_node( $vnode->child, $parent_hwnd );
+            $self->_mount_node( $vnode->child, $parent_hwnd, $parent_scroll_id );
         }
     }
 
     # SpinBox = EDIT + UPDOWN buddy control
-    method _mount_spin_box ( $vnode, $parent_hwnd ) {
+    method _mount_spin_box ( $vnode, $parent_hwnd, $parent_scroll_id = undef ) {
+        my $init_x = $vnode->bx;
+        my $init_y = $vnode->by;
+        if ($parent_scroll_id) {
+            my $prec = $registry->{$parent_scroll_id};
+            if ($prec) {
+                $init_x -= ( $prec->{scroll_x} // 0 );
+                $init_y -= ( $prec->{scroll_y} // 0 );
+            }
+        }
         my $edit = CreateWindowExW(
             0, 'EDIT',
             '' . ( $vnode->value // 0 ),
             0x50800080 | 0x2000,
-            $vnode->bx, $vnode->by, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef, undef
+            $init_x, $init_y, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef, undef
         );
-        my $updown = CreateWindowExW( 0, 'msctls_updown32', undef, 0x500000B2, $vnode->bx + $vnode->bw - 16,
-            $vnode->by, 16, $vnode->bh, $parent_hwnd, 0, undef, undef );
-        my $record = { hwnd => $edit, aux_hwnd => $updown, node => $vnode };
+        my $updown = CreateWindowExW( 0, 'msctls_updown32', undef, 0x500000B2, $init_x + $vnode->bw - 16,
+            $init_y, 16, $vnode->bh, $parent_hwnd, 0, undef, undef );
+        my $record = { hwnd => $edit, aux_hwnd => $updown, node => $vnode, parent_scroll_id => $parent_scroll_id };
         $registry->{ $vnode->id } = $record;
-
-        # Set font on both buddy controls
         $self->_apply_font($edit);
         $self->_apply_font($updown);
         SendMessageW( $updown, 0x0469, $edit,    0 );
@@ -714,7 +931,13 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     method set_prop ( $vnode_id, $prop_name, $value ) {
         my $record = $registry->{$vnode_id};
         return unless $record;
-        if ( $prop_name eq 'title' ) {
+        if ( $prop_name eq 'scroll_y' ) {
+            if ( $record->{node}->type eq 'scroll_view' ) {
+                $self->_scroll_to_y( $record, $value );
+                return;
+            }
+        }
+        elsif ( $prop_name eq 'title' ) {
             $main_hwnd = $record->{hwnd};
             SetWindowTextW( $main_hwnd, $value );
         }
@@ -761,12 +984,12 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $self->_set_list_selection( $record->{hwnd}, $record->{node}, $value );
         }
         elsif ( $prop_name eq 'value' ) {
-            if ( $record->{node}->type eq 'progress_bar' ) {
-                SendMessageW( $record->{hwnd}, 0x0402, $value, 0 );    # PBM_SETPOS
-                return;
-            }
             if ( $record->{node}->type eq 'slider' ) {
                 SendMessageW( $record->{hwnd}, 0x0405, 1, $value );
+                return;
+            }
+            if ( $record->{node}->type eq 'progress_bar' ) {
+                SendMessageW( $record->{hwnd}, 0x0402, $value, 0 );
                 return;
             }
             if ( $record->{node}->type eq 'combo_box' ) {
@@ -803,6 +1026,22 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 $suppress_events = 0;
                 my $len = length $value;
                 SendMessageW( $record->{hwnd}, 0x00B1, $len, $len );
+            }
+        }
+        elsif ( $prop_name eq 'indeterminate' ) {
+            if ( $record->{node}->type eq 'progress_bar' ) {
+                my $hwnd  = $record->{hwnd};
+                my $style = GetWindowLongW( $hwnd, -16 );
+                if ($value) {
+                    SetWindowLongW( $hwnd, -16, $style | 0x0008 );
+                    SendMessageW( $hwnd, 0x040A, 1, 30 );
+                }
+                else {
+                    SendMessageW( $hwnd, 0x040A, 0, 0 );
+                    SetWindowLongW( $hwnd, -16, $style & ~0x0008 );
+                    SendMessageW( $hwnd, 0x0402, $record->{node}->value // 0, 0 );
+                }
+                return;
             }
         }
         elsif ( $prop_name eq 'enabled' ) {
@@ -854,34 +1093,28 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 SendMessageW( $record->{hwnd}, 0x0406, 1, ( $max << 16 ) | $min );
             }
         }
-        elsif ( $prop_name eq 'indeterminate' ) {
-            if ( $record->{node}->type eq 'progress_bar' ) {
-                my $hwnd  = $record->{hwnd};
-                my $style = GetWindowLongW( $hwnd, -16 );    # -16 = GWL_STYLE
-                if ($value) {
-
-                    # Add PBS_MARQUEE (0x0008) and start the animation timer
-                    SetWindowLongW( $hwnd, -16, $style | 0x0008 );
-                    SendMessageW( $hwnd, 0x040A, 1, 30 );    # PBM_SETMARQUEE (1 = start, 30ms)
-                }
-                else {
-                    # Stop animation timer, remove PBS_MARQUEE, and restore the static progress value
-                    SendMessageW( $hwnd, 0x040A, 0, 0 );                              # PBM_SETMARQUEE (0 = stop)
-                    SetWindowLongW( $hwnd, -16, $style & ~0x0008 );
-                    SendMessageW( $hwnd, 0x0402, $record->{node}->value // 0, 0 );    # PBM_SETPOS
-                }
-                return;
-            }
-        }
     }
 
     method move_widget ( $vnode_id, $x, $y, $w, $h ) {
         my $record = $registry->{$vnode_id};
         return unless $record && $record->{hwnd};
-        SetWindowPos( $record->{hwnd}, undef, $x, $y, $w, $h, 0x0004 );
+        if ( my $pid = $record->{parent_scroll_id} ) {
+            my $prec = $registry->{$pid};
+            if ($prec) {
+                $x -= ( $prec->{scroll_x} // 0 );
+                $y -= ( $prec->{scroll_y} // 0 );
+            }
+        }
+
+        # SWP_NOCOPYBITS (0x0100) prevents stale pixel tearing during re-layout moves
+        SetWindowPos( $record->{hwnd}, undef, $x, $y, $w, $h, 0x0004 | 0x0100 );
+        if ( $record->{node}->type eq 'scroll_view' ) {
+            $self->_update_scroll_info($vnode_id);
+            RedrawWindow( $record->{hwnd}, undef, undef, 0x0185 );
+        }
         if ( $record->{aux_hwnd} ) {
-            SetWindowPos( $record->{aux_hwnd}, undef, $x + $w - 16, $y, 16, $h, 0x0004 );
+            SetWindowPos( $record->{aux_hwnd}, undef, $x + $w - 16, $y, 16, $h, 0x0004 | 0x0100 );
         }
     }
 };
-1
+1;
