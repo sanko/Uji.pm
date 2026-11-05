@@ -18,13 +18,8 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
     field $layout     : param //= Uji::Layout->new( driver => $driver );
 
     # Clamp a client-area size against the window node's min/max constraints.
-    # (min/max live on the root window node so the layout has a single source of truth.)
     method _clamp_size ( $cw, $ch ) {
-        $cw = $vtree->min_w if $vtree->min_w && $cw < $vtree->min_w;
-        $ch = $vtree->min_h if $vtree->min_h && $ch < $vtree->min_h;
-        $cw = $vtree->max_w if $vtree->max_w && $cw > $vtree->max_w;
-        $ch = $vtree->max_h if $vtree->max_h && $ch > $vtree->max_h;
-        return ( $cw, $ch );
+        return $vtree->clamp_size( $cw, $ch );
     }
 
     method _relayout_now ( $cw = undef, $ch = undef ) {
