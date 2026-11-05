@@ -11,6 +11,7 @@ package Uji v0.0.1 {
     use Uji::Node::RadioGroup;
     use Uji::Node::Row;
     use Uji::Node::Slider;
+    use Uji::Node::Spacer;
     use Uji::Node::Text;
     use Uji::Node::TextInput;
     use Uji::Node::Window;
@@ -33,6 +34,10 @@ package Uji v0.0.1 {
     sub slider      (%args)           { Uji::Node::Slider->new(%args) }
     sub checkbox    (%args)           { Uji::Node::Checkbox->new(%args) }
     sub radio_group (%args)           { Uji::Node::RadioGroup->new(%args) }
+    sub spacer (%args) {
+        $args{flex} //= 1 unless defined $args{w} || defined $args{h};
+        Uji::Node::Spacer->new(%args);
+    }
 };
 #
 1;
