@@ -128,6 +128,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             lpReserved => Pointer [Void]
         ];
         typedef SCROLLINFO => Struct [ cbSize => UInt, fMask => UInt, nMin => Int, nMax => Int, nPage => UInt, nPos => Int, nTrackPos => Int ];
+        typedef TCITEMW =>
+            Struct [ mask => UInt, dwState => ULong, dwStateMask => ULong, pszText => WString, cchTextMax => Int, iImage => Int, lParam => SSize_t ];
         affix 'user32', 'SetScrollInfo',        [ Pointer [Void], Int, Pointer [ SCROLLINFO() ], Int ] => Int;
         affix 'user32', 'GetScrollInfo',        [ Pointer [Void], Int, Pointer [ SCROLLINFO() ] ]      => Int;
         affix 'user32', 'GetWindowTextLengthW', [ Pointer [Void] ]                                     => Int;
@@ -153,7 +155,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $icc   = malloc( sizeof( INITCOMMONCONTROLSEX() ) );
         my $icc_s = cast( $icc, INITCOMMONCONTROLSEX() );
         $icc_s->{dwSize} = sizeof( INITCOMMONCONTROLSEX() );
-        $icc_s->{dwICC}  = 0x00000004 | 0x00000010 | 0x00000020 | 0x00000100;    # BAR | UPDOWN | PROGRESS | DATE
+        $icc_s->{dwICC}  = 0x00000004 | 0x000000008 | 0x00000010 | 0x00000020 | 0x00000100;    # BAR | ICC_TAB | UPDOWN | PROGRESS | DATE
         InitCommonControlsEx($icc);
         free($icc);
     }
@@ -256,6 +258,14 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                         my $value = $change->{dwFlags} == 1 ? '' :
                             sprintf( '%04d-%02d-%02d', $change->{st}{wYear}, $change->{st}{wMonth}, $change->{st}{wDay} );
                         my $action_msg = $node->on_change->($value);
+                        $self_ref->channel->put($action_msg) if $action_msg;
+                    }
+                }
+                if ( $record && $record->{node}->type eq 'tab_panel' && $hdr->{code} == -551 ) {      # TCN_SELCHANGE
+                    my $idx  = SendMessageW( $record->{hwnd}, 0x130B, 0, 0 );                         # TCM_GETCURSEL
+                    my $node = $record->{node};
+                    if ( $node->on_select ) {
+                        my $action_msg = $node->on_select->($idx);
                         $self_ref->channel->put($action_msg) if $action_msg;
                     }
                 }
@@ -771,31 +781,25 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             push @children, $rec;
         }
         if (@children) {
-            my $hdwp = BeginDeferWindowPos( scalar(@children) * 2 );
+            my $flags = 0x0004 | 0x0010 | 0x0100;                   # SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS
+            my $hdwp  = BeginDeferWindowPos( scalar(@children) );
             if ($hdwp) {
                 for my $rec (@children) {
-                    my $n     = $rec->{node};
-                    my $flags = 0x0004 | 0x0010 | 0x0100;    # SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS
+                    my $n = $rec->{node};
                     $hdwp = DeferWindowPos( $hdwp, $rec->{hwnd}, undef, $n->bx - $sx, $n->by - $sy, $n->bw, $n->bh, $flags );
-                    if ( $rec->{aux_hwnd} && $hdwp ) {
-                        $hdwp = DeferWindowPos( $hdwp, $rec->{aux_hwnd}, undef, ( $n->bx + $n->bw - 16 ) - $sx, $n->by - $sy, 16, $n->bh, $flags );
-                    }
                 }
                 EndDeferWindowPos($hdwp) if $hdwp;
             }
             else {
                 for my $rec (@children) {
-                    my $n     = $rec->{node};
-                    my $flags = 0x0004 | 0x0010 | 0x0100;
+                    my $n = $rec->{node};
                     SetWindowPos( $rec->{hwnd}, undef, $n->bx - $sx, $n->by - $sy, $n->bw, $n->bh, $flags );
-                    if ( $rec->{aux_hwnd} ) {
-                        SetWindowPos( $rec->{aux_hwnd}, undef, ( $n->bx + $n->bw - 16 ) - $sx, $n->by - $sy, 16, $n->bh, $flags );
-                    }
                 }
             }
         }
 
-        # Redraw the entire scrollview canvas and all children synchronously
+        # Redraw the entire scrollview canvas and all children synchronously:
+        # RDW_INVALIDATE (0x1) | RDW_ERASE (0x4) | RDW_ALLCHILDREN (0x80) | RDW_UPDATENOW (0x100) = 0x0185
         RedrawWindow( $record->{hwnd}, undef, undef, 0x0185 );
     }
 
@@ -895,6 +899,10 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             # WS_CHILD | WS_VISIBLE | (PBS_MARQUEE if indeterminate)
             $style = 0x50000000 | ( $vnode->indeterminate ? 0x0008 : 0 );
         }
+        elsif ( $vnode->type eq 'tab_panel' ) {
+            $class = 'SysTabControl32';
+            $style = 0x54000000;                   # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
+        }
         else {
             $registry->{ $vnode->id } = { hwnd => undef, node => $vnode, parent_hwnd => $parent_hwnd, parent_scroll_id => $parent_scroll_id };
             $self->_mount_node( $_, $parent_hwnd, $parent_scroll_id ) for @{ $vnode->children };
@@ -962,6 +970,23 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         if ( $vnode->type eq 'group_box' && $vnode->child ) {
             $self->_mount_node( $vnode->child, $parent_hwnd, $parent_scroll_id );
         }
+        if ( $vnode->type eq 'tab_panel' ) {
+            my $tabs = $vnode->tabs;
+            for my $i ( 0 .. $#$tabs ) {
+                my $tb      = $tabs->[$i];
+                my $tci_ptr = malloc( sizeof( TCITEMW() ) );
+                my $tci     = cast( $tci_ptr, TCITEMW() );
+                $tci->{mask}    = 0x0001;                                       # TCIF_TEXT
+                $tci->{pszText} = $tb->label;
+                SendMessageW( $hwnd, 0x133E, $i, Affix::address($tci_ptr) );    # TCM_INSERTITEMW
+                free($tci_ptr);
+            }
+            SendMessageW( $hwnd, 0x130C, $vnode->selected, 0 );                 # TCM_SETCURSEL
+            if ( my $at = $vnode->active_tab ) {
+                $self->_mount_node( $at->child, $parent_hwnd, $parent_scroll_id ) if $at->child;
+            }
+            return;
+        }
     }
 
     # SpinBox = EDIT + UPDOWN buddy control
@@ -975,20 +1000,22 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 $init_y -= ( $prec->{scroll_y} // 0 );
             }
         }
-        my $edit = CreateWindowExW(
-            0, 'EDIT',
-            '' . ( $vnode->value // 0 ),
-            0x50800080 | 0x2000,
-            $init_x, $init_y, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef, undef
-        );
-        my $updown = CreateWindowExW( 0, 'msctls_updown32', undef, 0x500000B2, $init_x + $vnode->bw - 16,
-            $init_y, 16, $vnode->bh, $parent_hwnd, 0, undef, undef );
-        my $record = { hwnd => $edit, aux_hwnd => $updown, node => $vnode, parent_scroll_id => $parent_scroll_id };
+
+        # EDIT: WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER
+        my $edit_style = 0x50800080 | 0x2000;
+        my $edit       = CreateWindowExW( 0, 'EDIT', '' . ( $vnode->value // 0 ),
+            $edit_style, $init_x, $init_y, $vnode->bw, $vnode->bh, $parent_hwnd, $vnode->id, undef, undef );
+
+# UPDOWN: WS_CHILD | WS_VISIBLE | UDS_ALIGNRIGHT (0x4) | UDS_SETBUDDYINT (0x2) | UDS_AUTOBUDDY (0x10) | UDS_ARROWKEYS (0x20) | UDS_NOTHOUSANDS (0x80) | UDS_HOTTRACK (0x100)
+        my $updown_style = 0x500001B6;
+        my $updown       = CreateWindowExW( 0, 'msctls_updown32', undef, $updown_style, 0, 0, 0, 0, $parent_hwnd, 0, undef, undef );
+        my $record       = { hwnd => $edit, aux_hwnd => $updown, node => $vnode, parent_scroll_id => $parent_scroll_id };
         $registry->{ $vnode->id } = $record;
         $self->_apply_font($edit);
         $self->_apply_font($updown);
-        SendMessageW( $updown, 0x0469, $edit,    0 );
-        SendMessageW( $edit,   0x00D3, 20 << 16, 0 );
+
+        # Attach buddy: with UDS_ALIGNRIGHT, Windows docks the updown control inside the right edge of edit
+        SendMessageW( $updown, 0x0469, $edit, 0 );    # UDM_SETBUDDY
         $self->_set_spin_range( $record, $vnode->min, $vnode->max );
         $self->_set_spin_accel( $record, $vnode->step );
         $self->_set_spin_value( $record, $vnode->value );
@@ -1058,6 +1085,12 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         elsif ( $prop_name eq 'selection' ) {
             return unless $record->{node}->type eq 'list_box';
             $self->_set_list_selection( $record->{hwnd}, $record->{node}, $value );
+        }
+        elsif ( $prop_name eq 'selected' ) {
+            if ( $record->{node}->type eq 'tab_panel' ) {
+                SendMessageW( $record->{hwnd}, 0x130C, $value, 0 );    # TCM_SETCURSEL
+                return;
+            }
         }
         elsif ( $prop_name eq 'value' ) {
             if ( $record->{node}->type eq 'slider' ) {
@@ -1202,9 +1235,6 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         if ( $record->{node}->type eq 'scroll_view' ) {
             $self->_update_scroll_info($vnode_id);
             RedrawWindow( $record->{hwnd}, undef, undef, 0x0185 );
-        }
-        if ( $record->{aux_hwnd} ) {
-            SetWindowPos( $record->{aux_hwnd}, undef, $x + $w - 16, $y, 16, $h, 0x0004 | 0x0100 );
         }
     }
 

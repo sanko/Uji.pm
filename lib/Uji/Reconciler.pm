@@ -154,6 +154,13 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
+        # Check selected (TabPanel)
+        if ( $old_node->can('selected') && $new_node->can('selected') ) {
+            if ( ( $old_node->selected // 0 ) != ( $new_node->selected // 0 ) ) {
+                $driver->set_prop( $new_node->id, 'selected', $new_node->selected );
+            }
+        }
+
         # Window geometry / state (topmost, min/max, minimized, maximized)
         if ( $old_node->can('topmost') && $new_node->can('topmost') ) {
             if ( ( $old_node->topmost // 0 ) != ( $new_node->topmost // 0 ) ) {

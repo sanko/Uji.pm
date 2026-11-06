@@ -37,6 +37,8 @@ package Uji v0.0.1 {
     use Uji::Node::MenuBar;
     use Uji::Node::MenuItem;
     use Uji::Node::MenuSeparator;
+    use Uji::Node::Tab;
+    use Uji::Node::TabPanel;
     #
     our %EXPORT_TAGS = (
         all => [
@@ -52,6 +54,7 @@ package Uji v0.0.1 {
                 every batch none
                 menu_bar menu menu_item menu_separator
                 message_box file_open_dialog file_save_dialog
+                tab_panel tab
                 ]
         ]
     );
@@ -76,6 +79,8 @@ package Uji v0.0.1 {
     sub group_box      (%args)           { Uji::Node::GroupBox->new(%args) }
     sub progress_bar   (%args)           { Uji::Node::ProgressBar->new(%args) }
     sub scroll_view    (%args)           { Uji::Node::ScrollView->new(%args) }
+    sub tab_panel      (%args)           { Uji::Node::TabPanel->new(%args) }
+    sub tab            (%args)           { Uji::Node::Tab->new(%args) }
 
     sub spacer (%args) {
         $args{flex} //= 1 unless defined $args{w} || defined $args{h};

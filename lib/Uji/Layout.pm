@@ -204,6 +204,29 @@ class Uji::Layout v0.0.1 {
             my $h = $max_h + ( $pad * 2 );
             return ( $w, $h );
         }
+
+        # TabPanel: header (~32px) + active tab child content + padding
+        if ( $t eq 'tab_panel' ) {
+            my $pad   = $node->padding;
+            my $hdr_h = 32;
+            my $at    = $node->active_tab;
+            my ( $cw, $ch ) = ( 0, 0 );
+            if ( $at && $at->child ) {
+                ( $cw, $ch ) = $self->_intrinsic( $at->child );
+                $cw = $at->child->w if $at->child->w;
+                $ch = $at->child->h if $at->child->h;
+            }
+
+            # Measure tab labels for minimum header width
+            my $headers_w = 0;
+            for my $tb ( @{ $node->tabs } ) {
+                my $lw = $driver && $driver->can('measure_text') ? ( $driver->measure_text( $tb->label ) )[0] : length( $tb->label ) * 8;
+                $headers_w += $lw + 24;
+            }
+            my $w = ( $cw > $headers_w ? $cw : $headers_w ) + ( $pad * 2 );
+            my $h = $ch + $hdr_h + ( $pad * 2 );
+            return ( $w, $h );
+        }
         return ( 100, 30 );
     }
 
@@ -286,6 +309,20 @@ class Uji::Layout v0.0.1 {
         }
         elsif ( $node->type eq 'row' ) {
             $self->_layout_flex( $node, 'horizontal', $start_x, $start_y, $w, $h );
+        }
+        elsif ( $node->type eq 'tab_panel' ) {
+            my $at = $node->active_tab;
+            if ( $at && $at->child ) {
+                my $pad    = $node->padding;
+                my $hdr_h  = 32;
+                my $body_x = $start_x + $pad + 2;
+                my $body_y = $start_y + $hdr_h + $pad;
+                my $body_w = $w - ( $pad * 2 ) - 4;
+                my $body_h = $h - $hdr_h - ( $pad * 2 ) - 4;
+                $body_w = 0 if $body_w < 0;
+                $body_h = 0 if $body_h < 0;
+                $self->compute( $at->child, $body_x, $body_y, $body_w, $body_h );
+            }
         }
     }
 
