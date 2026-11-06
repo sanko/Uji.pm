@@ -15,6 +15,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     field $on_resize       : reader(_get_resize_handler) = undef;
     field $suppress_events : reader(_is_suppressed)      = 0;
     field $gui_font;
+    field $dragging_splitter = undef;    # { record => $rec, start_pt => [x, y], orig_ratio => 0.5 }
     ADJUST {
         $registry = {};
         typedef WNDPROC => Callback [ [ Pointer [Void], UInt, Size_t, SSize_t ] => SSize_t ];
@@ -145,6 +146,13 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'gdi32',  'SelectObject',          [ Pointer [Void], Pointer [Void] ]               => Pointer [Void];
         affix 'gdi32',  'GetTextExtentPoint32W', [ Pointer [Void], WString, Int, Pointer [Void] ] => Int;
         typedef SIZE => Struct [ cx => Int, cy => Int ];
+        #
+        affix 'user32', 'SetCapture',     [ Pointer [Void] ]                                     => Pointer [Void];
+        affix 'user32', 'ReleaseCapture', []                                                     => Int;
+        affix 'user32', 'SetCursor',      [ Pointer [Void] ]                                     => Pointer [Void];
+        affix 'user32', 'GetCursorPos',   [ Pointer [ POINT() ] ]                                => Int;
+        affix 'user32', 'ScreenToClient', [ Pointer [Void], Pointer [ POINT() ] ]                => Int;
+        affix 'user32', 'FillRect',       [ Pointer [Void], Pointer [ RECT() ], Pointer [Void] ] => Int;
 
         # DEFAULT_GUI_FONT (17) matches standard controls and font metrics
         $gui_font = GetStockObject(17);
@@ -340,6 +348,56 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                         my $msg = $node->on_change->($pos);
                         $self_ref->channel->put($msg) if $msg;
                     }
+                }
+            }
+
+            # Paint native grey background for splitter bars
+            if ( $msg == 0x0014 ) {    # WM_ERASEBKGND
+                my $rec = $self_ref->_get_registry_by_hwnd($hwnd);
+                if ( $rec && $rec->{node}->type eq 'split_view' ) {
+                    my $hdc  = cast( $wparam, Pointer [Void] );
+                    my $rptr = malloc( sizeof( RECT() ) );
+                    GetClientRect( $hwnd, $rptr );
+                    FillRect( $hdc, $rptr, cast( 16, Pointer [Void] ) );    # 16 = COLOR_BTNFACE + 1
+                    free($rptr);
+                    return 1;
+                }
+            }
+
+            # Sizing mouse cursors on hover over splitter bars
+            if ( $msg == 0x0020 ) {    # WM_SETCURSOR
+                my $rec = $self_ref->_get_registry_by_hwnd($hwnd);
+                if ( $rec && $rec->{node}->type eq 'split_view' ) {
+                    my $cur = $rec->{node}->orientation eq 'vertical' ? 32645 : 32644;    # IDC_SIZENS (32645), IDC_SIZEWE (32644)
+                    SetCursor( LoadCursorW( undef, $cur ) );
+                    return 1;
+                }
+            }
+
+            # Start dragging splitter bar
+            if ( $msg == 0x0201 ) {    # WM_LBUTTONDOWN
+                my $rec = $self_ref->_get_registry_by_hwnd($hwnd);
+                if ( $rec && $rec->{node}->type eq 'split_view' ) {
+                    SetCapture($hwnd);
+                    $self_ref->_start_splitter_drag($rec);
+                    return 0;
+                }
+            }
+
+            # Dragging splitter bar
+            if ( $msg == 0x0200 ) {    # WM_MOUSEMOVE
+                if ( $self_ref->_is_dragging_splitter ) {
+                    $self_ref->_update_splitter_drag();
+                    return 0;
+                }
+            }
+
+            # End dragging splitter bar
+            if ( $msg == 0x0202 ) {    # WM_LBUTTONUP
+                if ( $self_ref->_is_dragging_splitter ) {
+                    ReleaseCapture();
+                    $self_ref->_end_splitter_drag();
+                    return 0;
                 }
             }
             return DefWindowProcW( $hwnd, $msg, $wparam, $lparam );
@@ -830,6 +888,19 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 $self->_mount_node( $vnode->child, $hwnd, $vnode->id );
             }
             return;
+        }    # SplitView: splitter bar is a native sub-window that handles drag and cursor changes
+        if ( $vnode->type eq 'split_view' ) {
+            my $style    = 0x54000000;        # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
+            my $bar_hwnd = CreateWindowExW(
+                0,              'UjiWindowClass', undef,        $style,     $vnode->bar_bx, $vnode->bar_by,
+                $vnode->bar_bw, $vnode->bar_bh,   $parent_hwnd, $vnode->id, undef,          undef
+            );
+            $registry->{ $vnode->id } = { hwnd => $bar_hwnd, node => $vnode, parent_hwnd => $parent_hwnd, parent_scroll_id => $parent_scroll_id };
+
+            # Mount first and second panes
+            $self->_mount_node( $vnode->first,  $parent_hwnd, $parent_scroll_id ) if $vnode->first;
+            $self->_mount_node( $vnode->second, $parent_hwnd, $parent_scroll_id ) if $vnode->second;
+            return;
         }
         my ( $class, $style, $initial_text );
         if ( $vnode->type eq 'button' ) {
@@ -1040,6 +1111,13 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 return;
             }
         }
+        elsif ( $prop_name eq 'split' ) {
+            if ( $record->{node}->type eq 'split_view' ) {
+                my $node = $record->{node};
+                SetWindowPos( $record->{hwnd}, undef, $node->bar_bx, $node->bar_by, $node->bar_bw, $node->bar_bh, 0x0004 | 0x0100 );
+                return;
+            }
+        }
         elsif ( $prop_name eq 'title' ) {
             $main_hwnd = $record->{hwnd};
             SetWindowTextW( $main_hwnd, $value );
@@ -1236,6 +1314,11 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $self->_update_scroll_info($vnode_id);
             RedrawWindow( $record->{hwnd}, undef, undef, 0x0185 );
         }
+        elsif ( $record->{node}->type eq 'split_view' ) {
+            my $node = $record->{node};
+            SetWindowPos( $record->{hwnd}, undef, $node->bar_bx, $node->bar_by, $node->bar_bw, $node->bar_bh, 0x0004 | 0x0100 );
+            return;
+        }
     }
 
     method show_message_box (%args) {
@@ -1307,6 +1390,55 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         free($buf);
         free($ofn_ptr);
         return $ok ? $result : undef;
+    }
+    method _is_dragging_splitter () { defined $dragging_splitter }
+
+    method _start_splitter_drag ($record) {
+        $dragging_splitter = { record => $record };
+    }
+
+    method _end_splitter_drag () {
+        $dragging_splitter = undef;
+    }
+
+    method _update_splitter_drag () {
+        return unless $dragging_splitter;
+        my $record = $dragging_splitter->{record};
+        my $node   = $record->{node};
+        my $pt_buf = malloc( sizeof( POINT() ) );
+        GetCursorPos($pt_buf);
+        ScreenToClient( $record->{parent_hwnd} // $main_hwnd, $pt_buf );
+        my $pt = cast( $pt_buf, POINT() );
+        my ( $mx, $my ) = ( $pt->{x}, $pt->{y} );
+        free($pt_buf);
+        my $s = $node->splitter_size // 6;
+        my $new_ratio;
+
+        if ( $node->orientation eq 'vertical' ) {
+            my $avail = $node->bh - $s;
+            return if $avail <= 0;
+            my $rel_y = $my - $node->by - int( $s / 2 );
+            $new_ratio = $rel_y / $avail;
+            my $min_r = ( $node->min_first || 40 ) / $avail;
+            my $max_r = 1.0 - ( ( $node->min_second || 40 ) / $avail );
+            $new_ratio = $min_r if $new_ratio < $min_r;
+            $new_ratio = $max_r if $new_ratio > $max_r;
+        }
+        else {
+            my $avail = $node->bw - $s;
+            return if $avail <= 0;
+            my $rel_x = $mx - $node->bx - int( $s / 2 );
+            $new_ratio = $rel_x / $avail;
+            my $min_r = ( $node->min_first || 40 ) / $avail;
+            my $max_r = 1.0 - ( ( $node->min_second || 40 ) / $avail );
+            $new_ratio = $min_r if $new_ratio < $min_r;
+            $new_ratio = $max_r if $new_ratio > $max_r;
+        }
+        $new_ratio = sprintf( '%.3f', $new_ratio );
+        if ( $new_ratio != $node->split && $node->on_change ) {
+            my $msg = $node->on_change->( 0 + $new_ratio );
+            $channel->put($msg) if $msg;
+        }
     }
 };
 1;

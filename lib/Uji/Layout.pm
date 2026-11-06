@@ -3,6 +3,11 @@ use experimental 'class';
 class Uji::Layout v0.0.1 {
     field $driver : param : reader;
 
+    # Checks whether a node is a structural container
+    method _is_container ($type) {
+        return $type =~ /^(?:column|row|scroll_view|group_box|tab_panel|split_view|radio_group)$/;
+    }
+
     # Natural (content) size of a node measured through the driver
     method _intrinsic ($node) {
         my $t = $node->type;
@@ -18,6 +23,46 @@ class Uji::Layout v0.0.1 {
         if ( $t eq 'scroll_view' ) {
             my $w = $node->w || 320;
             my $h = $node->h || 240;
+            return ( $w, $h );
+        }
+
+        # SplitView container: sum of child sizes + splitter bar
+        if ( $t eq 'split_view' ) {
+            my $s = $node->splitter_size // 6;
+            my ( $w1, $h1 ) = ( 0, 0 );
+            my ( $w2, $h2 ) = ( 0, 0 );
+            ( $w1, $h1 ) = $self->_intrinsic( $node->first )  if $node->first;
+            ( $w2, $h2 ) = $self->_intrinsic( $node->second ) if $node->second;
+            if ( $node->orientation eq 'vertical' ) {
+                my $w = $w1 > $w2 ? $w1 : $w2;
+                my $h = $h1 + $h2 + $s;
+                return ( $w, $h );
+            }
+            else {
+                my $w = $w1 + $w2 + $s;
+                my $h = $h1 > $h2 ? $h1 : $h2;
+                return ( $w, $h );
+            }
+        }
+
+        # TabPanel: header (~32px) + active tab child content + padding
+        if ( $t eq 'tab_panel' ) {
+            my $pad   = $node->padding;
+            my $hdr_h = 32;
+            my $at    = $node->active_tab;
+            my ( $cw, $ch ) = ( 0, 0 );
+            if ( $at && $at->child ) {
+                ( $cw, $ch ) = $self->_intrinsic( $at->child );
+                $cw = $at->child->w if $at->child->w;
+                $ch = $at->child->h if $at->child->h;
+            }
+            my $headers_w = 0;
+            for my $tb ( @{ $node->tabs } ) {
+                my $lw = $driver && $driver->can('measure_text') ? ( $driver->measure_text( $tb->label ) )[0] : length( $tb->label ) * 8;
+                $headers_w += $lw + 24;
+            }
+            my $w = ( $cw > $headers_w ? $cw : $headers_w ) + ( $pad * 2 );
+            my $h = $ch + $hdr_h + ( $pad * 2 );
             return ( $w, $h );
         }
 
@@ -204,29 +249,6 @@ class Uji::Layout v0.0.1 {
             my $h = $max_h + ( $pad * 2 );
             return ( $w, $h );
         }
-
-        # TabPanel: header (~32px) + active tab child content + padding
-        if ( $t eq 'tab_panel' ) {
-            my $pad   = $node->padding;
-            my $hdr_h = 32;
-            my $at    = $node->active_tab;
-            my ( $cw, $ch ) = ( 0, 0 );
-            if ( $at && $at->child ) {
-                ( $cw, $ch ) = $self->_intrinsic( $at->child );
-                $cw = $at->child->w if $at->child->w;
-                $ch = $at->child->h if $at->child->h;
-            }
-
-            # Measure tab labels for minimum header width
-            my $headers_w = 0;
-            for my $tb ( @{ $node->tabs } ) {
-                my $lw = $driver && $driver->can('measure_text') ? ( $driver->measure_text( $tb->label ) )[0] : length( $tb->label ) * 8;
-                $headers_w += $lw + 24;
-            }
-            my $w = ( $cw > $headers_w ? $cw : $headers_w ) + ( $pad * 2 );
-            my $h = $ch + $hdr_h + ( $pad * 2 );
-            return ( $w, $h );
-        }
         return ( 100, 30 );
     }
 
@@ -257,14 +279,17 @@ class Uji::Layout v0.0.1 {
                 # Flex-driven height takes precedence over intrinsic fallback
                 $h = $avail_h;
             }
-            elsif ( $node->type ne 'column' && $node->type ne 'row' && $node->type ne 'scroll_view' ) {
-                my ( $iw, $ih ) = $self->_intrinsic($node);
-                $h = $ih;
-                $w = $iw if !$node->w && $node->flex <= 0 && $avail_w == 0;
-            }
-            else {
+            elsif ( $self->_is_container( $node->type ) ) {
+
+                # Containers fill available constrained height if provided, or shrink to content
                 my ( $iw, $ih ) = $self->_intrinsic($node);
                 $h = ( $avail_h > 0 ? $avail_h : $ih );
+            }
+            else {
+                # Leaf widgets (button, text, input, etc.) shrink to intrinsic content height
+                my ( $iw, $ih ) = $self->_intrinsic($node);
+                $h = $ih;
+                $w = $iw if !$node->w && $avail_w == 0;
             }
         }
 
@@ -291,6 +316,60 @@ class Uji::Layout v0.0.1 {
                 $self->compute( $node->child, 0, 0, $cw, $ch );
             }
         }
+        elsif ( $node->type eq 'split_view' ) {
+            my $s = $node->splitter_size // 6;
+            if ( $node->orientation eq 'vertical' ) {
+                my $total_avail = $h - $s;
+                $total_avail = 0 if $total_avail < 0;
+                my $first_h = int( $total_avail * ( $node->split // 0.5 ) );
+                $first_h = $node->min_first                 if $node->min_first  && $first_h < $node->min_first;
+                $first_h = $total_avail - $node->min_second if $node->min_second && ( $total_avail - $first_h ) < $node->min_second;
+                $first_h = 0                                if $first_h < 0;
+                $first_h = $total_avail                     if $first_h > $total_avail;
+                my $second_h = $total_avail - $first_h;
+                $second_h = 0 if $second_h < 0;
+
+                # Set bar bounds
+                $node->set_bar_bounds( $start_x, $start_y + $first_h, $w, $s );
+
+                # Compute panes
+                $self->compute( $node->first,  $start_x, $start_y,                 $w, $first_h )  if $node->first;
+                $self->compute( $node->second, $start_x, $start_y + $first_h + $s, $w, $second_h ) if $node->second;
+            }
+            else {
+                # Horizontal split: first pane on left, second on right
+                my $total_avail = $w - $s;
+                $total_avail = 0 if $total_avail < 0;
+                my $first_w = int( $total_avail * ( $node->split // 0.5 ) );
+                $first_w = $node->min_first                 if $node->min_first  && $first_w < $node->min_first;
+                $first_w = $total_avail - $node->min_second if $node->min_second && ( $total_avail - $first_w ) < $node->min_second;
+                $first_w = 0                                if $first_w < 0;
+                $first_w = $total_avail                     if $first_w > $total_avail;
+                my $second_w = $total_avail - $first_w;
+                $second_w = 0 if $second_w < 0;
+
+                # Set bar bounds
+                $node->set_bar_bounds( $start_x + $first_w, $start_y, $s, $h );
+
+                # Compute panes
+                $self->compute( $node->first,  $start_x,                 $start_y, $first_w,  $h ) if $node->first;
+                $self->compute( $node->second, $start_x + $first_w + $s, $start_y, $second_w, $h ) if $node->second;
+            }
+        }
+        elsif ( $node->type eq 'tab_panel' ) {
+            my $at = $node->active_tab;
+            if ( $at && $at->child ) {
+                my $pad    = $node->padding;
+                my $hdr_h  = 32;
+                my $body_x = $start_x + $pad + 2;
+                my $body_y = $start_y + $hdr_h + $pad;
+                my $body_w = $w - ( $pad * 2 ) - 4;
+                my $body_h = $h - $hdr_h - ( $pad * 2 ) - 4;
+                $body_w = 0 if $body_w < 0;
+                $body_h = 0 if $body_h < 0;
+                $self->compute( $at->child, $body_x, $body_y, $body_w, $body_h );
+            }
+        }
         elsif ( $node->type eq 'group_box' ) {
             if ( $node->child ) {
                 my $pad     = $node->padding;
@@ -309,20 +388,6 @@ class Uji::Layout v0.0.1 {
         }
         elsif ( $node->type eq 'row' ) {
             $self->_layout_flex( $node, 'horizontal', $start_x, $start_y, $w, $h );
-        }
-        elsif ( $node->type eq 'tab_panel' ) {
-            my $at = $node->active_tab;
-            if ( $at && $at->child ) {
-                my $pad    = $node->padding;
-                my $hdr_h  = 32;
-                my $body_x = $start_x + $pad + 2;
-                my $body_y = $start_y + $hdr_h + $pad;
-                my $body_w = $w - ( $pad * 2 ) - 4;
-                my $body_h = $h - $hdr_h - ( $pad * 2 ) - 4;
-                $body_w = 0 if $body_w < 0;
-                $body_h = 0 if $body_h < 0;
-                $self->compute( $at->child, $body_x, $body_y, $body_w, $body_h );
-            }
         }
     }
 

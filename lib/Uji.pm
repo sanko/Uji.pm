@@ -37,6 +37,7 @@ package Uji v0.0.1 {
     use Uji::Node::MenuBar;
     use Uji::Node::MenuItem;
     use Uji::Node::MenuSeparator;
+    use Uji::Node::SplitView;
     use Uji::Node::Tab;
     use Uji::Node::TabPanel;
     #
@@ -55,6 +56,7 @@ package Uji v0.0.1 {
                 menu_bar menu menu_item menu_separator
                 message_box file_open_dialog file_save_dialog
                 tab_panel tab
+                split_view
                 ]
         ]
     );
@@ -86,6 +88,7 @@ package Uji v0.0.1 {
         $args{flex} //= 1 unless defined $args{w} || defined $args{h};
         Uji::Node::Spacer->new(%args);
     }
+    sub split_view (%args) { Uji::Node::SplitView->new(%args) }
 
     # Subscription primitives
     sub every ( $ms, $action, %args ) { Uji::Sub::every( $ms, $action, %args ) }

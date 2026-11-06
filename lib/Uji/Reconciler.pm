@@ -154,6 +154,13 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
+        # Check split (SplitView)
+        if ( $old_node->can('split') && $new_node->can('split') ) {
+            if ( ( $old_node->split // 0 ) != ( $new_node->split // 0 ) ) {
+                $driver->set_prop( $new_node->id, 'split', $new_node->split );
+            }
+        }
+
         # Check selected (TabPanel)
         if ( $old_node->can('selected') && $new_node->can('selected') ) {
             if ( ( $old_node->selected // 0 ) != ( $new_node->selected // 0 ) ) {
