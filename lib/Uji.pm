@@ -40,6 +40,7 @@ package Uji v0.0.1 {
     use Uji::Node::SplitView;
     use Uji::Node::Tab;
     use Uji::Node::TabPanel;
+    use Uji::Node::ListView;
     #
     our %EXPORT_TAGS = (
         all => [
@@ -57,6 +58,7 @@ package Uji v0.0.1 {
                 message_box file_open_dialog file_save_dialog
                 tab_panel tab
                 split_view
+                list_view
                 ]
         ]
     );
@@ -83,6 +85,7 @@ package Uji v0.0.1 {
     sub scroll_view    (%args)           { Uji::Node::ScrollView->new(%args) }
     sub tab_panel      (%args)           { Uji::Node::TabPanel->new(%args) }
     sub tab            (%args)           { Uji::Node::Tab->new(%args) }
+    sub list_view(%args) { Uji::Node::ListView->new(%args) }
 
     sub spacer (%args) {
         $args{flex} //= 1 unless defined $args{w} || defined $args{h};

@@ -84,6 +84,18 @@ class Uji::Layout v0.0.1 {
             return ( $w, $h );
         }
 
+        # ListView: sum of column widths + standard table height (~220px)
+        if ( $t eq 'list_view' ) {
+            my $total_w = 0;
+            for my $col ( @{ $node->columns } ) {
+                $total_w += $col->{width} // 100;
+            }
+            $total_w += 24;    # vertical scrollbar margin + border
+            $total_w = 260 if $total_w < 260;
+            my $h = $node->h || 220;
+            return ( $total_w, $h );
+        }
+
         # Progress bar: standard bar width / height
         if ( $t eq 'progress_bar' ) {
             return ( 160, 20 );

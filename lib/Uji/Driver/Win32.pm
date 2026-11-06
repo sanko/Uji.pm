@@ -15,7 +15,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     field $on_resize       : reader(_get_resize_handler) = undef;
     field $suppress_events : reader(_is_suppressed)      = 0;
     field $gui_font;
-    field $dragging_splitter = undef;    # { record => $rec, start_pt => [x, y], orig_ratio => 0.5 }
+    field $dragging_splitter   = undef;    # { record => $rec, start_pt => [x, y], orig_ratio => 0.5 }
+    field $active_inplace_edit = undef;    # { hwnd, edit_hwnd, row_idx, col_id, orig_wndproc }
     ADJUST {
         $registry = {};
         typedef WNDPROC => Callback [ [ Pointer [Void], UInt, Size_t, SSize_t ] => SSize_t ];
@@ -64,11 +65,13 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'user32', [ 'SendMessageW', 'SendMessageWStr' ], [ Pointer [Void], UInt, Size_t, WString ] => SSize_t;
 
         # Menus
-        affix 'user32', 'CreateMenu',      []                                        => Pointer [Void];
-        affix 'user32', 'CreatePopupMenu', []                                        => Pointer [Void];
-        affix 'user32', 'AppendMenuW',     [ Pointer [Void], UInt, Size_t, WString ] => Int;
-        affix 'user32', 'SetMenu',         [ Pointer [Void], Pointer [Void] ]        => Int;
-        affix 'user32', 'DrawMenuBar',     [ Pointer [Void] ]                        => Int;
+        affix 'user32', 'CreateMenu',       []                                                                 => Pointer [Void];
+        affix 'user32', 'CreatePopupMenu',  []                                                                 => Pointer [Void];
+        affix 'user32', 'AppendMenuW',      [ Pointer [Void], UInt, Size_t, WString ]                          => Int;
+        affix 'user32', 'SetMenu',          [ Pointer [Void], Pointer [Void] ]                                 => Int;
+        affix 'user32', 'DrawMenuBar',      [ Pointer [Void] ]                                                 => Int;
+        affix 'user32', 'DestroyMenu',      [ Pointer [Void] ]                                                 => Int;
+        affix 'user32', 'TrackPopupMenuEx', [ Pointer [Void], UInt, Int, Int, Pointer [Void], Pointer [Void] ] => Int;
 
         # Dialogs
         affix 'user32', 'MessageBoxW', [ Pointer [Void], WString, WString, UInt ] => Int;
@@ -128,6 +131,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             lParam     => SSize_t,
             lpReserved => Pointer [Void]
         ];
+        typedef LVHITTESTINFO => Struct [ pt => POINT(), flags => UInt, iItem => Int, iSubItem => Int ];
         typedef SCROLLINFO => Struct [ cbSize => UInt, fMask => UInt, nMin => Int, nMax => Int, nPage => UInt, nPos => Int, nTrackPos => Int ];
         typedef TCITEMW =>
             Struct [ mask => UInt, dwState => ULong, dwStateMask => ULong, pszText => WString, cchTextMax => Int, iImage => Int, lParam => SSize_t ];
@@ -146,29 +150,127 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         affix 'gdi32',  'SelectObject',          [ Pointer [Void], Pointer [Void] ]               => Pointer [Void];
         affix 'gdi32',  'GetTextExtentPoint32W', [ Pointer [Void], WString, Int, Pointer [Void] ] => Int;
         typedef SIZE => Struct [ cx => Int, cy => Int ];
-        #
         affix 'user32', 'SetCapture',     [ Pointer [Void] ]                                     => Pointer [Void];
         affix 'user32', 'ReleaseCapture', []                                                     => Int;
         affix 'user32', 'SetCursor',      [ Pointer [Void] ]                                     => Pointer [Void];
         affix 'user32', 'GetCursorPos',   [ Pointer [ POINT() ] ]                                => Int;
         affix 'user32', 'ScreenToClient', [ Pointer [Void], Pointer [ POINT() ] ]                => Int;
         affix 'user32', 'FillRect',       [ Pointer [Void], Pointer [ RECT() ], Pointer [Void] ] => Int;
+        typedef LVCOLUMNW =>
+            Struct [ mask => UInt, fmt => Int, cx => Int, pszText => WString, cchTextMax => Int, iSubItem => Int, iImage => Int, iOrder => Int ];
+        typedef HDITEMW => Struct [
+            mask       => UInt,
+            cxy        => Int,
+            pszText    => WString,
+            hbm        => Pointer [Void],
+            cchTextMax => Int,
+            fmt        => Int,
+            lParam     => SSize_t,
+            iImage     => Int,
+            iOrder     => Int,
+            type       => UInt,
+            pvFilter   => Pointer [Void]
+        ];
+        typedef LVITEMW => Struct [
+            mask       => UInt,
+            iItem      => Int,
+            iSubItem   => Int,
+            state      => UInt,
+            stateMask  => UInt,
+            pszText    => Pointer [Void],    # Persistent C pointer buffer
+            cchTextMax => Int,
+            iImage     => Int,
+            lParam     => SSize_t
+        ];
+        typedef NMLISTVIEW => Struct [
+            hdr       => NMHDR(),
+            iItem     => Int,
+            iSubItem  => Int,
+            uNewState => UInt,
+            uOldState => UInt,
+            uChanged  => UInt,
+            ptAction  => POINT(),
+            lParam    => SSize_t
+        ];
+
+        # NMLVDISPINFOW struct for LVN_GETDISPINFOW and LVN_ENDLABELEDITW
+        typedef NMLVDISPINFOW => Struct [
+            hwndFrom => Pointer [Void],    # 0
+            idFrom   => Size_t,            # 8
+            code     => Int,               # 16
+            _pad_hdr => Int,               # 20
+
+            # Embedded LVITEMW:
+            mask       => UInt,              # 24
+            iItem      => Int,               # 28
+            iSubItem   => Int,               # 32
+            state      => UInt,              # 36
+            stateMask  => UInt,              # 40
+            _pad_item  => Int,               # 44
+            pszText    => Pointer [Void],    # 48
+            cchTextMax => Int,               # 56
+            iImage     => Int,               # 60
+            lParam     => SSize_t            # 64
+        ];
+
+        # GDI functions for cell drawing
+        affix 'gdi32',  'SetBkMode',        [ Pointer [Void], Int ]                                    => Int;
+        affix 'gdi32',  'SetTextColor',     [ Pointer [Void], ULong ]                                  => ULong;
+        affix 'gdi32',  'CreateSolidBrush', [ULong]                                                    => Pointer [Void];
+        affix 'gdi32',  'DeleteObject',     [ Pointer [Void] ]                                         => Int;
+        affix 'user32', 'DrawTextW',        [ Pointer [Void], WString, Int, Pointer [ RECT() ], UInt ] => Int;
+        affix 'user32', 'FrameRect',        [ Pointer [Void], Pointer [ RECT() ], Pointer [Void] ]     => Int;
+        typedef NMLVCUSTOMDRAW => Struct [
+            hwndFrom    => Pointer [Void],    # offset 0
+            idFrom      => Size_t,            # offset 8
+            code        => Int,               # offset 16
+            _pad_hdr    => Int,               # offset 20 (64-bit alignment padding)
+            dwDrawStage => UInt,              # offset 24
+            _pad_ds     => Int,               # offset 28
+            hdc         => Pointer [Void],    # offset 32
+            rc          => RECT(),            # offset 40 (16 bytes)
+            dwItemSpec  => Size_t,            # offset 56 (row index)
+            uItemState  => UInt,              # offset 64
+            _pad_is     => Int,               # offset 68
+            lItemlParam => SSize_t,           # offset 72
+            clrText     => UInt,              # offset 80
+            clrTextBk   => UInt,              # offset 84
+            iSubItem    => Int,               # offset 88 (column index)
+            dwItemType  => UInt               # offset 92
+        ];
+
+        # Comctl32 Window Subclassing API for in-place cell editing
+        typedef SUBCLASSPROC => Callback [ [ Pointer [Void], UInt, Size_t, SSize_t, Size_t, SSize_t ] => SSize_t ];
+        affix 'comctl32', 'SetWindowSubclass',    [ Pointer [Void], SUBCLASSPROC(), Size_t, SSize_t ] => Int;
+        affix 'comctl32', 'RemoveWindowSubclass', [ Pointer [Void], SUBCLASSPROC(), Size_t ]          => Int;
+        affix 'comctl32', 'DefSubclassProc',      [ Pointer [Void], UInt, Size_t, SSize_t ]           => SSize_t;
+        #
+        typedef NMITEMACTIVATE => Struct [
+            hdr       => NMHDR(),
+            iItem     => Int,
+            iSubItem  => Int,
+            uNewState => UInt,
+            uOldState => UInt,
+            uChanged  => UInt,
+            ptAction  => POINT(),
+            lParam    => SSize_t,
+            uKeyFlags => UInt
+        ];
 
         # DEFAULT_GUI_FONT (17) matches standard controls and font metrics
         $gui_font = GetStockObject(17);
 
-        # Common controls (trackbar/slider, etc.)
+        # Common controls (listview, tab, bar, updown, progress, date)
         typedef INITCOMMONCONTROLSEX => Struct [ dwSize => ULong, dwICC => ULong ];
         affix 'comctl32', 'InitCommonControlsEx', [ Pointer [ INITCOMMONCONTROLSEX() ] ] => Int;
         my $icc   = malloc( sizeof( INITCOMMONCONTROLSEX() ) );
         my $icc_s = cast( $icc, INITCOMMONCONTROLSEX() );
         $icc_s->{dwSize} = sizeof( INITCOMMONCONTROLSEX() );
-        $icc_s->{dwICC}  = 0x00000004 | 0x000000008 | 0x00000010 | 0x00000020 | 0x00000100;    # BAR | ICC_TAB | UPDOWN | PROGRESS | DATE
+        $icc_s->{dwICC}  = 0x00000001 | 0x00000004 | 0x00000008 | 0x00000010 | 0x00000020 | 0x00000100;
         InitCommonControlsEx($icc);
         free($icc);
     }
 
-    # Apply the standard GUI font to child controls via WM_SETFONT (0x0030)
     method _apply_font ($hwnd) {
         return unless $hwnd && $gui_font;
         SendMessageW( $hwnd, 0x0030, Affix::address($gui_font), 1 );
@@ -190,42 +292,32 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 if ($record) {
                     my $node = $record->{node};
 
-                    # BN_CLICKED (0) -> Button click
+                    # BN_CLICKED (0) -> Button / Menu click
                     if ( $notify_code == 0 && $node->can('on_click') && $node->on_click ) {
                         $self_ref->channel->put( $node->on_click );
                     }
-
-                    # BN_CLICKED (0) -> Checkbox toggle: read actual state back from the control
                     elsif ( $notify_code == 0 && $node->can('on_toggle') && $node->on_toggle ) {
                         my $checked    = SendMessageW( $record->{hwnd}, 0x00F0, 0, 0 );    # BM_GETCHECK
                         my $action_msg = $node->on_toggle->( $checked ? 1 : 0 );
                         $self_ref->channel->put($action_msg) if $action_msg;
                     }
-
-                    # BN_CLICKED (0) -> Radio select: dispatch the clicked option's value
                     elsif ( $notify_code == 0 && $node->can('on_select') && $node->on_select ) {
                         my $action_msg = $node->on_select->( $node->value );
                         $self_ref->channel->put($action_msg) if $action_msg;
                     }
-
-                    # CBN_SELCHANGE (1) -> ComboBox selection: map native index back to value
                     elsif ( $notify_code == 1 && $node->type eq 'combo_box' && $node->on_select ) {
-                        my $idx = SendMessageW( $record->{hwnd}, 0x0147, 0, 0 );    # CB_GETCURSEL
+                        my $idx = SendMessageW( $record->{hwnd}, 0x0147, 0, 0 );           # CB_GETCURSEL
                         if ( $idx >= 0 && $idx <= $#{ $node->options } ) {
                             my $action_msg = $node->on_select->( $node->options->[$idx]{value} );
                             $self_ref->channel->put($action_msg) if $action_msg;
                         }
                     }
-
-                    # CBN_EDITCHANGE (5) -> ComboBox edit text changed by user
                     elsif ( $notify_code == 5 && $node->type eq 'combo_box' && $node->can('on_input') && $node->on_input ) {
                         return DefWindowProcW( $hwnd, $msg, $wparam, $lparam ) if $self_ref->_is_suppressed;
                         my $text       = $self_ref->_get_text( $record->{hwnd} );
                         my $action_msg = $node->on_input->($text);
                         $self_ref->channel->put($action_msg) if $action_msg;
                     }
-
-                    # LBN_SELCHANGE (1) -> ListBox selection
                     elsif ( $notify_code == 1 && $node->type eq 'list_box' && $node->on_select ) {
                         my $idx = SendMessageW( $record->{hwnd}, 0x0188, 0, 0 );    # LB_GETCURSEL
                         if ( $idx >= 0 && $idx <= $#{ $node->options } ) {
@@ -233,8 +325,6 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                             $self_ref->channel->put($action_msg) if $action_msg;
                         }
                     }
-
-                    # EN_CHANGE (0x0300) -> SpinBox text changed
                     elsif ( $notify_code == 0x0300 && $node->type eq 'spin_box' && $node->on_change ) {
                         return DefWindowProcW( $hwnd, $msg, $wparam, $lparam ) if $self_ref->_is_suppressed;
                         my $text = $self_ref->_get_text( $record->{hwnd} );
@@ -256,10 +346,218 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                     }
                 }
             }
-            elsif ( $msg == 0x004E ) {    # WM_NOTIFY -> date picker
+            elsif ( $msg == 0x007B ) {    # WM_CONTEXTMENU
+                my $target_hwnd = cast( $wparam, Pointer [Void] );
+                my $rec         = $self_ref->_get_registry_by_hwnd($target_hwnd);
+                if ( $rec && $rec->{node}->can('context_menu') && $rec->{node}->context_menu ) {
+                    $self_ref->_show_context_menu( $rec, $lparam );
+                    return 0;
+                }
+            }
+            elsif ( $msg == 0x004E ) {    # WM_NOTIFY
                 my $hdr    = cast( $lparam, NMHDR() );
                 my $record = $self_ref->_get_registry_record( $hdr->{idFrom} );
-                if ( $record && $record->{node}->type eq 'date_picker' && $hdr->{code} == -759 ) {    # DTN_DATETIMECHANGE
+
+                # NM_CUSTOMDRAW (-12) -> Custom cell drawing (progress bars & badges)
+                if ( $record && $record->{node}->type eq 'list_view' && $hdr->{code} == -12 ) {
+                    return $self_ref->_handle_list_view_custom_draw( $record, $lparam );
+                }
+
+                # Selection & Checkbox notifications for ListView
+                # - NM_CLICK (-2): Mouse click settled completely
+                # - LVN_ITEMCHANGED (-100): Selection gained via keyboard or code
+                if ( $record && $record->{node}->type eq 'list_view' && ( $hdr->{code} == -100 || $hdr->{code} == -2 ) ) {
+                    return DefWindowProcW( $hwnd, $msg, $wparam, $lparam ) if $self_ref->_is_suppressed;
+                    my $should_notify = 0;
+                    if ( $hdr->{code} == -2 ) {    # NM_CLICK
+                        my $node = $record->{node};
+
+                        # Virtual Checkbox Handling via Hit-Test
+                        if ( $node->virtual && $node->checkboxes ) {
+                            my $pt_buf = malloc( sizeof( POINT() ) );
+                            GetCursorPos($pt_buf);
+                            ScreenToClient( $record->{hwnd}, $pt_buf );
+                            my $ht_buf = malloc( sizeof( LVHITTESTINFO() ) );
+                            my $ht     = cast( $ht_buf, LVHITTESTINFO() );
+                            $ht->{pt}{x} = cast( $pt_buf, POINT() )->{x};
+                            $ht->{pt}{y} = cast( $pt_buf, POINT() )->{y};
+                            SendMessageW( $record->{hwnd}, 0x1012, 0, Affix::address($ht_buf) );    # LVM_HITTEST
+
+                            if ( ( $ht->{flags} & 0x0008 ) && $ht->{iItem} >= 0 ) {                 # LVHT_ONITEMSTATEICON (0x0008)
+                                my $iItem = $ht->{iItem};
+                                my $row;
+                                if ( $node->on_row ) {
+                                    $row = $node->on_row->($iItem);
+                                }
+                                if ( $row && $node->on_check ) {
+                                    my $is_chk = ref $row eq 'HASH' ? ( $row->{checked} // 0 ) : 0;
+                                    my $action = $node->on_check->( $iItem, $row, $is_chk ? 0 : 1 );
+                                    $self_ref->channel->put($action) if $action;
+                                }
+                                free($ht_buf);
+                                free($pt_buf);
+                                return 0;    # Handled!
+                            }
+                            free($ht_buf);
+                            free($pt_buf);
+                        }
+                        $should_notify = 1;
+                    }
+                    elsif ( $hdr->{code} == -100 ) {    # LVN_ITEMCHANGED
+                        my $nmlv = cast( $lparam, NMLISTVIEW() );
+                        my $node = $record->{node};
+
+                        # Row Checkbox Toggled (Standard non-virtual mode)
+                        if ( !$node->virtual && $node->checkboxes && $node->on_check ) {
+                            my $old_chk = ( $nmlv->{uOldState} >> 12 ) & 3;
+                            my $new_chk = ( $nmlv->{uNewState} >> 12 ) & 3;
+                            if ( ( $new_chk == 1 || $new_chk == 2 ) && $new_chk != $old_chk ) {
+                                my $is_chk = ( $new_chk == 2 ? 1 : 0 );
+                                my $row    = ( $nmlv->{iItem} >= 0 && $nmlv->{iItem} < @{ $node->rows } ) ? $node->rows->[ $nmlv->{iItem} ] : undef;
+                                my $action = $node->on_check->( $nmlv->{iItem}, $row, $is_chk );
+                                $self_ref->channel->put($action) if $action;
+                            }
+                        }
+
+                        # Only notify on selection GAINED (ignore transient deselections)
+                        if ( ( $nmlv->{uNewState} & 0x0002 ) && !( $nmlv->{uOldState} & 0x0002 ) ) {
+                            $should_notify = 1;
+                        }
+                    }
+                    if ($should_notify) {
+                        my $node = $record->{node};
+                        if ( $node->on_select ) {
+                            my $indices = $self_ref->_get_list_view_selected_indices( $record->{hwnd} );
+                            my $rows    = $node->rows // [];
+                            if ( $node->multiselect ) {
+                                my @sel_rows = map { $node->on_row ? $node->on_row->($_) : ( $_ >= 0 && $_ < @$rows ) ? $rows->[$_] : () } @$indices;
+                                my $action_msg = $node->on_select->( $indices, \@sel_rows );
+                                $self_ref->channel->put($action_msg) if $action_msg;
+                            }
+                            else {
+                                my $first_idx = @$indices ? $indices->[0] : -1;
+                                my $first_row
+                                    = $node->on_row                            ? ( $first_idx >= 0 ? $node->on_row->($first_idx) : undef ) :
+                                    ( $first_idx >= 0 && $first_idx < @$rows ) ? $rows->[$first_idx] :
+                                    undef;
+                                my $action_msg = $node->on_select->( $first_idx, $first_row );
+                                $self_ref->channel->put($action_msg) if $action_msg;
+                            }
+                        }
+                    }
+                }
+
+                # NM_DBLCLK (-3) or NM_RETURN (-4) -> Double-click or Enter activation
+                if ( $record && $record->{node}->type eq 'list_view' && ( $hdr->{code} == -3 || $hdr->{code} == -4 ) ) {
+                    my $node    = $record->{node};
+                    my $row_idx = -1;
+                    my $col_idx = -1;
+                    if ( $hdr->{code} == -3 ) {
+                        my $nma = cast( $lparam, NMITEMACTIVATE() );
+                        $row_idx = $nma->{iItem};
+                        $col_idx = $nma->{iSubItem};
+                    }
+                    else {
+                        my $indices = $self_ref->_get_list_view_selected_indices( $record->{hwnd} );
+                        $row_idx = $indices->[0] if @$indices;
+                    }
+                    my $cols = $node->columns // [];
+                    if ( $node->on_edit && $col_idx >= 0 && $col_idx <= $#$cols && $cols->[$col_idx]{editable} ) {
+                        $self_ref->_start_inplace_edit( $record, $row_idx, $col_idx );
+                        return 0;
+                    }
+                    elsif ( $node->on_activate && $row_idx >= 0 ) {
+                        my $row;
+                        if ( $node->on_row ) {
+                            $row = $node->on_row->($row_idx);
+                        }
+                        else {
+                            my $rows = $node->rows // [];
+                            $row = $row_idx < @$rows ? $rows->[$row_idx] : undef;
+                        }
+                        my $action_msg = $node->on_activate->( $row_idx, $row );
+                        $self_ref->channel->put($action_msg) if $action_msg;
+                    }
+                }
+
+                # LVN_KEYDOWN (-155) -> F2 (edit) or Space (checkbox)
+                if ( $record && $record->{node}->type eq 'list_view' && $hdr->{code} == -155 ) {
+                    my $wVKey = cast( Affix::address($lparam) + 24, 'UShort' );    # offset 24 on x64
+                    my $node  = $record->{node};
+                    if ( $wVKey == 0x71 ) {                                        # VK_F2
+                        my $indices = $self_ref->_get_list_view_selected_indices( $record->{hwnd} );
+                        if (@$indices) {
+                            my $row_idx = $indices->[0];
+                            my $cols    = $node->columns // [];
+                            for my $c ( 0 .. $#$cols ) {
+                                if ( $cols->[$c]{editable} ) {
+                                    $self_ref->_start_inplace_edit( $record, $row_idx, $c );
+                                    last;
+                                }
+                            }
+                        }
+                    }
+                    elsif ( $wVKey == 0x20 && $node->virtual && $node->checkboxes ) {    # VK_SPACE
+                        my $indices = $self_ref->_get_list_view_selected_indices( $record->{hwnd} );
+                        for my $iItem (@$indices) {
+                            my $row;
+                            if ( $node->on_row ) {
+                                $row = $node->on_row->($iItem);
+                            }
+                            if ( $row && $node->on_check ) {
+                                my $is_chk     = ref $row eq 'HASH' ? ( $row->{checked} // 0 ) : 0;
+                                my $action_msg = $node->on_check->( $iItem, $row, $is_chk ? 0 : 1 );
+                                $self_ref->channel->put($action_msg) if $action_msg;
+                            }
+                        }
+                    }
+                }
+
+                # LVN_COLUMNCLICK (-108) -> User clicked a column header
+                if ( $record && $record->{node}->type eq 'list_view' && $hdr->{code} == -108 ) {
+                    my $nmlv    = cast( $lparam, NMLISTVIEW() );
+                    my $col_idx = $nmlv->{iSubItem};
+                    my $node    = $record->{node};
+                    if ( $node->on_sort && $node->columns && $col_idx <= $#{ $node->columns } ) {
+                        my $col_id   = $node->columns->[$col_idx]{id} // $node->columns->[$col_idx]{text};
+                        my $curr_dir = ( ( $node->sort_column // '' ) eq $col_id ) ? ( $node->sort_direction // 'asc' ) : 'desc';
+                        my $new_dir  = ( $curr_dir eq 'asc' )                      ? 'desc'                             : 'asc';
+                        my $action   = $node->on_sort->( $col_id, $new_dir );
+                        $self_ref->channel->put($action) if $action;
+                    }
+                }
+
+                # LVN_GETDISPINFOW (-177) -> Virtual Mode row data provider
+                if ( $record && $record->{node}->type eq 'list_view' && $hdr->{code} == -177 ) {
+                    my $di    = cast( $lparam, NMLVDISPINFOW() );
+                    my $node  = $record->{node};
+                    my $r_idx = $di->{iItem};
+                    my $c_idx = $di->{iSubItem};
+                    my $cols  = $node->columns // [];
+                    my $row;
+                    if ( $node->on_row ) {
+                        $row = $node->on_row->($r_idx);
+                    }
+                    elsif ( $r_idx >= 0 && $r_idx < @{ $node->rows // [] } ) {
+                        $row = $node->rows->[$r_idx];
+                    }
+                    if ($row) {
+                        if ( $di->{mask} & 0x0001 ) {    # LVIF_TEXT
+                            my $cid       = ( $c_idx <= $#$cols ) ? ( $cols->[$c_idx]{id} // $cols->[$c_idx]{text} // '' ) : '';
+                            my $val       = ref $row eq 'HASH'    ? ( $row->{$cid} // '' ) : ( $row->[$c_idx] // '' );
+                            my $utf16     = Encode::encode( 'UTF-16LE', "$val\0" );
+                            my $max_bytes = ( $di->{cchTextMax} - 1 ) * 2;
+                            my $copy_len  = length($utf16) > $max_bytes ? $max_bytes : length($utf16);
+                            memcpy( $di->{pszText}, $utf16, $copy_len );
+                        }
+                        if ( ( $di->{mask} & 0x0008 ) && ( $di->{stateMask} & 0x3000 ) ) {    # LVIF_STATE, LVIS_STATEIMAGEMASK
+                            my $is_chk = ref $row eq 'HASH' ? ( $row->{checked} // 0 ) : 0;
+                            $di->{state} = ( $is_chk ? 2 : 1 ) << 12;
+                        }
+                    }
+                    return 0;
+                }
+                if ( $record && $record->{node}->type eq 'date_picker' && $hdr->{code} == -759 ) {
                     my $change = cast( $lparam, NMDATETIMECHANGE() );
                     my $node   = $record->{node};
                     if ( $node->on_change ) {
@@ -269,8 +567,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                         $self_ref->channel->put($action_msg) if $action_msg;
                     }
                 }
-                if ( $record && $record->{node}->type eq 'tab_panel' && $hdr->{code} == -551 ) {      # TCN_SELCHANGE
-                    my $idx  = SendMessageW( $record->{hwnd}, 0x130B, 0, 0 );                         # TCM_GETCURSEL
+                if ( $record && $record->{node}->type eq 'tab_panel' && $hdr->{code} == -551 ) {
+                    my $idx  = SendMessageW( $record->{hwnd}, 0x130B, 0, 0 );    # TCM_GETCURSEL
                     my $node = $record->{node};
                     if ( $node->on_select ) {
                         my $action_msg = $node->on_select->($idx);
@@ -605,7 +903,97 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         DrawMenuBar($hwnd);
     }
 
+    # Shows an interactive right-click context menu and dispatches selection via WM_COMMAND
+    method _show_context_menu ( $record, $lparam ) {
+        my $node = $record->{node};
+        my ( $screen_x, $screen_y );
+        my $lx = $lparam & 0xFFFF;
+        my $ly = ( $lparam >> 16 ) & 0xFFFF;
+        $lx = $lx - 0x10000 if $lx > 0x7FFF;
+        $ly = $ly - 0x10000 if $ly > 0x7FFF;
+        if ( $lx == -1 && $ly == -1 ) {
+            my $pt_buf = malloc( sizeof( POINT() ) );
+            GetCursorPos($pt_buf);
+            my $pt = cast( $pt_buf, POINT() );
+            ( $screen_x, $screen_y ) = ( $pt->{x}, $pt->{y} );
+            free($pt_buf);
+        }
+        else {
+            ( $screen_x, $screen_y ) = ( $lx, $ly );
+        }
+        my $menu_def = $node->context_menu;
+        my $cm;
+        if ( ref $menu_def eq 'CODE' ) {
+            if ( $node->type eq 'list_view' ) {
+                my $indices = $self->_get_list_view_selected_indices( $record->{hwnd} );
+                my $rows    = $node->rows // [];
+
+                # If no row is selected, hit-test the item under the mouse cursor
+                if ( !@$indices ) {
+                    my $pt_buf = malloc( sizeof( POINT() ) );
+                    my $pt     = cast( $pt_buf, POINT() );
+                    $pt->{x} = $screen_x;
+                    $pt->{y} = $screen_y;
+                    ScreenToClient( $record->{hwnd}, $pt_buf );
+                    my $ht_buf = malloc( sizeof( LVHITTESTINFO() ) );
+                    my $ht     = cast( $ht_buf, LVHITTESTINFO() );
+                    $ht->{pt}{x} = $pt->{x};
+                    $ht->{pt}{y} = $pt->{y};
+                    SendMessageW( $record->{hwnd}, 0x1012, 0, Affix::address($ht_buf) );    # LVM_HITTEST
+                    my $hit_idx = $ht->{iItem};
+                    free($ht_buf);
+                    free($pt_buf);
+
+                    if ( $hit_idx >= 0 && $hit_idx < @$rows ) {
+                        $indices = [$hit_idx];
+
+                        # Select the right-clicked row natively
+                        my $sptr  = malloc( sizeof( LVITEMW() ) );
+                        my $sitem = cast( $sptr, LVITEMW() );
+                        $sitem->{state}     = 0x0002 | 0x0001;
+                        $sitem->{stateMask} = 0x0002 | 0x0001;
+                        SendMessageW( $record->{hwnd}, 0x102B, $hit_idx, Affix::address($sptr) );
+                        free($sptr);
+                    }
+                }
+                if ( $node->multiselect ) {
+                    my @sel_rows = map { ( $_ >= 0 && $_ < @$rows ) ? $rows->[$_] : () } @$indices;
+                    $cm = $menu_def->( $indices, \@sel_rows );
+                }
+                else {
+                    my $idx = @$indices                      ? $indices->[0] : -1;
+                    my $row = ( $idx >= 0 && $idx < @$rows ) ? $rows->[$idx] : undef;
+                    $cm = $menu_def->( $idx, $row );
+                }
+            }
+            else {
+                $cm = $menu_def->();
+            }
+        }
+        else {
+            $cm = $menu_def;
+        }
+        return unless $cm && $cm->can('items');
+        my $hpopup = CreatePopupMenu();
+        for my $item ( @{ $cm->items } ) {
+            if ( $item->type eq 'menu_separator' ) {
+                AppendMenuW( $hpopup, 0x0800, 0, undef );
+            }
+            elsif ( $item->type eq 'menu_item' ) {
+                $registry->{ $item->id } = { hwnd => undef, node => $item };
+                my $text  = $item->label . ( $item->shortcut ? "\t" . $item->shortcut : '' );
+                my $flags = 0x0000;
+                $flags |= 0x0008 if $item->checked;
+                $flags |= 0x0001 unless $item->enabled;
+                AppendMenuW( $hpopup, $flags, $item->id, $text );
+            }
+        }
+        TrackPopupMenuEx( $hpopup, 0x0000, $screen_x, $screen_y, $main_hwnd, undef );
+        DestroyMenu($hpopup);
+    }
+
     method destroy_widget ($id) {
+        $self->_commit_inplace_edit(0) if $active_inplace_edit && $active_inplace_edit->{record}{node}->id == $id;
         my $record = delete $registry->{$id};
         return unless $record;
         if ( my $hwnd = $record->{hwnd} ) {
@@ -756,20 +1144,20 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         my $sptr        = malloc( sizeof( SCROLLINFO() ) );
         my $si          = cast( $sptr, SCROLLINFO() );
         $si->{cbSize} = sizeof( SCROLLINFO() );
-        $si->{fMask}  = 0x0017;                                                    # SIF_ALL
+        $si->{fMask}  = 0x0017;                           # SIF_ALL
         GetScrollInfo( $scroll_hwnd, 1, $sptr );
         my $cur_pos = $si->{nPos};
         my $new_pos = $cur_pos;
         my $page    = $si->{nPage};
         my $max_pos = $si->{nMax} - $page + 1;
         $max_pos = 0 if $max_pos < 0;
-        if    ( $action == 0 )                 { $new_pos -= 26; }                 # SB_LINEUP
-        elsif ( $action == 1 )                 { $new_pos += 26; }                 # SB_LINEDOWN
-        elsif ( $action == 2 )                 { $new_pos -= $page; }              # SB_PAGEUP
-        elsif ( $action == 3 )                 { $new_pos += $page; }              # SB_PAGEDOWN
-        elsif ( $action == 4 || $action == 5 ) { $new_pos = $si->{nTrackPos}; }    # SB_THUMBPOSITION / SB_THUMBTRACK
-        elsif ( $action == 6 )                 { $new_pos = $si->{nMin}; }         # SB_TOP
-        elsif ( $action == 7 )                 { $new_pos = $max_pos; }            # SB_BOTTOM
+        if    ( $action == 0 )                 { $new_pos -= 26; }
+        elsif ( $action == 1 )                 { $new_pos += 26; }
+        elsif ( $action == 2 )                 { $new_pos -= $page; }
+        elsif ( $action == 3 )                 { $new_pos += $page; }
+        elsif ( $action == 4 || $action == 5 ) { $new_pos = $si->{nTrackPos}; }
+        elsif ( $action == 6 )                 { $new_pos = $si->{nMin}; }
+        elsif ( $action == 7 )                 { $new_pos = $max_pos; }
         $new_pos = $si->{nMin} if $new_pos < $si->{nMin};
         $new_pos = $max_pos    if $new_pos > $max_pos;
         free($sptr);
@@ -974,6 +1362,15 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             $class = 'SysTabControl32';
             $style = 0x54000000;                   # WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
         }
+        elsif ( $vnode->type eq 'list_view' ) {
+            $class = 'SysListView32';
+
+            # Base styles: WS_CHILD | WS_VISIBLE | WS_BORDER | WS_CLIPSIBLINGS | LVS_REPORT (0x1) | LVS_SHOWSELALWAYS (0x8)
+            $style = 0x54800009;
+            $style |= 0x00000004 unless $vnode->multiselect;    # LVS_SINGLESEL (0x4)
+            $style |= 0x00001000 if $vnode->virtual;            # LVS_OWNERDATA (0x1000) for virtual mode
+            $style |= 0x00000200 if $vnode->on_edit;            # LVS_EDITLABELS (0x200) for in-place editing
+        }
         else {
             $registry->{ $vnode->id } = { hwnd => undef, node => $vnode, parent_hwnd => $parent_hwnd, parent_scroll_id => $parent_scroll_id };
             $self->_mount_node( $_, $parent_hwnd, $parent_scroll_id ) for @{ $vnode->children };
@@ -1028,6 +1425,18 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         if ( $vnode->type eq 'date_picker' ) {
             $self->_set_date_value( $hwnd, $vnode->value );
             SetFocus($hwnd) if $vnode->focused;
+        }
+        if ( $vnode->type eq 'list_view' ) {
+
+            # Enable callback mask for virtual mode checkboxes
+            SendMessageW( $hwnd, 0x100B, 0x3000, 0 )    # LVM_SETCALLBACKMASK, LVIS_STATEIMAGEMASK
+                if $vnode->virtual && $vnode->checkboxes;
+            #
+            $self->_populate_list_view( $hwnd, $vnode );
+
+            # If an initial scroll_to_row target was specified at mount time, jump to it immediately
+            SendMessageW( $hwnd, 0x1013, $vnode->scroll_to_row, 0 )    # LVM_ENSUREVISIBLE
+                if $vnode->can('scroll_to_row') && defined $vnode->scroll_to_row && $vnode->scroll_to_row >= 0;
         }
         if ( $vnode->type eq 'progress_bar' ) {
             SendMessageW( $hwnd, 0x0406, $vnode->min,   $vnode->max );    # PBM_SETRANGE32
@@ -1111,6 +1520,15 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 return;
             }
         }
+        elsif ( $prop_name eq 'scroll_to_row' ) {
+            if ( $record->{node}->type eq 'list_view' ) {
+                if ( defined $value && $value >= 0 ) {
+                    SendMessageW( $record->{hwnd}, 0x1013, $value, 0 );    # LVM_ENSUREVISIBLE
+                    RedrawWindow( $record->{hwnd}, undef, undef, 0x0185 );
+                }
+                return;
+            }
+        }
         elsif ( $prop_name eq 'split' ) {
             if ( $record->{node}->type eq 'split_view' ) {
                 my $node = $record->{node};
@@ -1167,6 +1585,27 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         elsif ( $prop_name eq 'selected' ) {
             if ( $record->{node}->type eq 'tab_panel' ) {
                 SendMessageW( $record->{hwnd}, 0x130C, $value, 0 );    # TCM_SETCURSEL
+                return;
+            }
+            elsif ( $record->{node}->type eq 'list_view' ) {
+                $suppress_events = 1;
+                my $sptr  = malloc( sizeof( LVITEMW() ) );
+                my $sitem = cast( $sptr, LVITEMW() );
+
+                # Clear all previous selections
+                $sitem->{state}     = 0;
+                $sitem->{stateMask} = 0x0002;
+                SendMessageW( $record->{hwnd}, 0x102B, -1, Affix::address($sptr) );
+
+                # Set selection(s)
+                my @to_select = ref $value eq 'ARRAY' ? @$value : ( ( defined $value && $value >= 0 ) ? ($value) : () );
+                for my $idx (@to_select) {
+                    $sitem->{state}     = 0x0002 | 0x0001;
+                    $sitem->{stateMask} = 0x0002 | 0x0001;
+                    SendMessageW( $record->{hwnd}, 0x102B, $idx, Affix::address($sptr) );
+                }
+                free($sptr);
+                $suppress_events = 0;
                 return;
             }
         }
@@ -1293,6 +1732,34 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             }
             else {
                 SendMessageW( $record->{hwnd}, 0x0406, 1, ( $max << 16 ) | $min );
+            }
+        }
+        elsif ( $prop_name eq 'columns' ) {
+            if ( $record->{node}->type eq 'list_view' ) {
+                $self->_populate_list_view( $record->{hwnd}, $record->{node} );
+                return;
+            }
+        }
+        elsif ( $prop_name eq 'rows' ) {
+            if ( $record->{node}->type eq 'list_view' ) {
+                if ( $record->{node}->virtual ) {
+
+                    # Only set item count if it actually changed to avoid scrollbar disruption
+                    my $old_count = SendMessageW( $record->{hwnd}, 0x1004, 0, 0 );    # LVM_GETITEMCOUNT
+                    my $new_count = $record->{node}->total_row_count;
+                    if ( $old_count != $new_count ) {
+                        SendMessageW( $record->{hwnd}, 0x102F, $new_count, 2 );       # LVSICF_NOSCROLL (0x2) preserves scroll position
+                    }
+                    $self->_apply_header_sort_arrows( $record->{hwnd}, $record->{node} );
+                    RedrawWindow( $record->{hwnd}, undef, undef, 0x0185 );
+                    return;
+                }
+
+                # Standard mode
+                $self->_populate_list_view_rows( $record->{hwnd}, $record->{node} );
+                $self->_apply_header_sort_arrows( $record->{hwnd}, $record->{node} );
+                RedrawWindow( $record->{hwnd}, undef, undef, 0x0185 );
+                return;
             }
         }
     }
@@ -1439,6 +1906,424 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             my $msg = $node->on_change->( 0 + $new_ratio );
             $channel->put($msg) if $msg;
         }
+    }
+
+    method _get_list_view_selected_indices ($hwnd) {
+        my @selected;
+        my $idx = -1;
+        while (1) {
+            $idx = SendMessageW( $hwnd, 0x100C, $idx, 0x0002 );    # LVM_GETNEXTITEM, LVNI_SELECTED
+            last if $idx < 0;
+            push @selected, $idx;
+        }
+        return \@selected;
+    }
+
+    method _populate_list_view ( $hwnd, $node ) {
+        my $suppress_token = $suppress_events;
+        $suppress_events = 1;
+
+        # Extended Styles: Full row select, double buffering, optional gridlines, column reordering, checkboxes
+        my $ex = 0x00000020;                                                 # LVS_EX_FULLROWSELECT
+        $ex |= 0x00000001 if $node->gridlines;                               # LVS_EX_GRIDLINES
+        $ex |= 0x00000010 if $node->column_reorder;                          # LVS_EX_HEADERDRAGDROP
+        $ex |= 0x00000004 if $node->checkboxes;                              # LVS_EX_CHECKBOXES
+        $ex |= 0x00010000;                                                   # LVS_EX_DOUBLEBUFFER
+        SendMessageW( $hwnd, 0x1036, 0, $ex );                               # LVM_SETEXTENDEDLISTVIEWSTYLE
+        my $header = SendMessageW( $hwnd, 0x101F, 0, 0 );                    # LVM_GETHEADER
+        my $count  = $header ? SendMessageW( $header, 0x1200, 0, 0 ) : 0;    # HDM_GETITEMCOUNT
+
+        # Save existing user-adjusted column widths (LVM_GETCOLUMNWIDTH = 0x101D)
+        my @saved_widths;
+        if ( $count > 0 ) {
+            for my $i ( 0 .. $count - 1 ) {
+                my $cw = SendMessageW( $hwnd, 0x101D, $i, 0 );
+                push @saved_widths, $cw if $cw > 0;
+            }
+        }
+        SendMessageW( $hwnd, 0x101C, 0, 0 ) for 1 .. $count;                 # LVM_DELETECOLUMN
+        SendMessageW( $hwnd, 0x1009, 0, 0 );                                 # LVM_DELETEALLITEMS
+        $self->_populate_list_view_columns( $hwnd, $node, \@saved_widths );
+        $self->_populate_list_view_rows( $hwnd, $node );
+        $self->_apply_header_sort_arrows( $hwnd, $node ) if $header;
+        $suppress_events = $suppress_token;
+    }
+
+    method _apply_header_sort_arrows ( $hwnd, $node ) {
+        my $header = SendMessageW( $hwnd, 0x101F, 0, 0 );                    # LVM_GETHEADER
+        return unless $header;
+        my $cols     = $node->columns        // [];
+        my $sort_col = $node->sort_column    // '';
+        my $sort_dir = $node->sort_direction // 'asc';
+        for my $i ( 0 .. $#$cols ) {
+            my $col_id = $cols->[$i]{id} // $cols->[$i]{text} // '';
+            my $hptr   = malloc( sizeof( HDITEMW() ) );
+            my $hitem  = cast( $hptr, HDITEMW() );
+            $hitem->{mask} = 0x0004;                                       # HDI_FORMAT
+            SendMessageW( $header, 0x120B, $i, Affix::address($hptr) );    # HDM_GETITEMW
+            $hitem->{mask} = 0x0004;
+            $hitem->{fmt} &= ~( 0x0400 | 0x0200 );                         # Clear HDF_SORTUP / HDF_SORTDOWN
+            if ( $col_id eq $sort_col ) {
+                $hitem->{fmt} |= ( $sort_dir eq 'desc' ? 0x0200 : 0x0400 );
+            }
+            SendMessageW( $header, 0x120C, $i, Affix::address($hptr) );    # HDM_SETITEMW
+            free($hptr);
+        }
+    }
+
+    method _populate_list_view_columns ( $hwnd, $node, $saved_widths = [] ) {
+        my $cols = $node->columns // [];
+        for my $i ( 0 .. $#$cols ) {
+            my $col  = $cols->[$i];
+            my $cptr = malloc( sizeof( LVCOLUMNW() ) );
+            my $c    = cast( $cptr, LVCOLUMNW() );
+            $c->{mask} = 0x0001 | 0x0002 | 0x0004 | 0x0008;                # LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM
+
+            # Preserve user-dragged width if present; otherwise use VDOM width
+            my $w_spec = ( $saved_widths && $i < @$saved_widths ) ? $saved_widths->[$i] : ( $col->{width} // 100 );
+            my $cx     = ( $w_spec eq 'auto' )                    ? -1                  : 0 + $w_spec;
+            $c->{cx}       = $cx;
+            $c->{pszText}  = $col->{text} // "Col $i";
+            $c->{iSubItem} = $i;
+            my $align = $col->{align} // 'left';
+            $c->{fmt} = ( $align eq 'right' ) ? 0x0001 : ( $align eq 'center' ) ? 0x0002 : 0x0000;
+            SendMessageW( $hwnd, 0x1061, $i, Affix::address($cptr) );      # LVM_INSERTCOLUMNW
+            free($cptr);
+
+            # If width => 'auto' was specified, automatically resize to longest content item
+            SendMessageW( $hwnd, 0x101E, $i, -1 ) if $w_spec eq 'auto';    # LVM_SETCOLUMNWIDTH, LVSCW_AUTOSIZE
+        }
+    }
+
+    method _populate_list_view_rows ( $hwnd, $node ) {
+        my $suppress_token = $suppress_events;
+        $suppress_events = 1;
+
+        # Virtual Mode: instant allocation via LVM_SETITEMCOUNT (0x102F)
+        if ( $node->virtual ) {
+            my $count = $node->total_row_count;
+            SendMessageW( $hwnd, 0x102F, $count, 0 );                      # LVM_SETITEMCOUNT
+            RedrawWindow( $hwnd, undef, undef, 0x0185 );
+            $suppress_events = $suppress_token;
+            return;
+        }
+
+        # Standard Non-Virtual Mode (full row population)
+        SendMessageW( $hwnd, 0x1009, 0, 0 );    # LVM_DELETEALLITEMS
+        my $cols = $node->columns // [];
+        my $rows = $node->rows    // [];
+        for my $r_idx ( 0 .. $#$rows ) {
+            my $row        = $rows->[$r_idx];
+            my $first_text = '';
+            if ( ref $row eq 'HASH' ) {
+                my $key = @$cols ? ( $cols->[0]{id} // $cols->[0]{text} // '' ) : '';
+                $first_text = '' . ( $row->{$key} // '' );
+            }
+            elsif ( ref $row eq 'ARRAY' ) {
+                $first_text = '' . ( $row->[0] // '' );
+            }
+            else {
+                $first_text = '' . ( $row // '' );
+            }
+
+            # Allocate persistent wide-string buffer in C memory for column 0
+            my $utf16_first = Encode::encode( 'UTF-16LE', $first_text . "\0" );
+            my $buf1        = malloc( length($utf16_first) );
+            memcpy( $buf1, $utf16_first, length($utf16_first) );
+            my $iptr = malloc( sizeof( LVITEMW() ) );
+            my $item = cast( $iptr, LVITEMW() );
+            $item->{mask}     = 0x0001;                                 # LVIF_TEXT
+            $item->{iItem}    = $r_idx;
+            $item->{iSubItem} = 0;
+            $item->{pszText}  = $buf1;
+            SendMessageW( $hwnd, 0x104D, 0, Affix::address($iptr) );    # LVM_INSERTITEMW
+            free($buf1);
+            free($iptr);
+
+            # Populate sub-items (Columns 1..N)
+            for my $c_idx ( 1 .. $#$cols ) {
+                my $sub_text = '';
+                if ( ref $row eq 'HASH' ) {
+                    my $key = $cols->[$c_idx]{id} // $cols->[$c_idx]{text} // '';
+                    $sub_text = '' . ( $row->{$key} // '' );
+                }
+                elsif ( ref $row eq 'ARRAY' ) {
+                    $sub_text = '' . ( $row->[$c_idx] // '' );
+                }
+                my $utf16_sub = Encode::encode( 'UTF-16LE', $sub_text . "\0" );
+                my $buf2      = malloc( length($utf16_sub) );
+                memcpy( $buf2, $utf16_sub, length($utf16_sub) );
+                my $sptr  = malloc( sizeof( LVITEMW() ) );
+                my $sitem = cast( $sptr, LVITEMW() );
+                $sitem->{mask}     = 0x0001;                                     # LVIF_TEXT
+                $sitem->{iItem}    = $r_idx;
+                $sitem->{iSubItem} = $c_idx;
+                $sitem->{pszText}  = $buf2;
+                SendMessageW( $hwnd, 0x1074, $r_idx, Affix::address($sptr) );    # LVM_SETITEMTEXTW
+                free($buf2);
+                free($sptr);
+            }
+        }
+
+        # Set row check state if native checkboxes are enabled
+        if ( $node->checkboxes ) {
+            my $sptr  = malloc( sizeof( LVITEMW() ) );
+            my $sitem = cast( $sptr, LVITEMW() );
+            $sitem->{stateMask} = 0x3000;    # LVIS_STATEIMAGEMASK
+            for my $r_idx ( 0 .. $#$rows ) {
+                my $row        = $rows->[$r_idx];
+                my $is_checked = ref $row eq 'HASH' ? ( $row->{checked} // 0 ) : 0;
+                $sitem->{state} = ( $is_checked ? 2 : 1 ) << 12;
+                SendMessageW( $hwnd, 0x102B, $r_idx, Affix::address($sptr) );    # LVM_SETITEMSTATE
+            }
+            free($sptr);
+        }
+
+        # Select specified row(s) (supports both scalar index and arrayref of indices)
+        if ( defined $node->selected ) {
+            my @to_select = ref $node->selected eq 'ARRAY' ? @{ $node->selected } : ( $node->selected >= 0 ? ( $node->selected ) : () );
+            if (@to_select) {
+                my $sptr  = malloc( sizeof( LVITEMW() ) );
+                my $sitem = cast( $sptr, LVITEMW() );
+                $sitem->{state}     = 0x0002 | 0x0001;                           # LVIS_SELECTED | LVIS_FOCUSED
+                $sitem->{stateMask} = 0x0002 | 0x0001;
+                for my $s_idx (@to_select) {
+                    if ( $s_idx >= 0 && $s_idx < @$rows ) {
+                        SendMessageW( $hwnd, 0x102B, $s_idx, Affix::address($sptr) );    # LVM_SETITEMSTATE
+                    }
+                }
+                free($sptr);
+            }
+        }
+        $suppress_events = $suppress_token;
+    }
+
+    method _handle_list_view_custom_draw ( $record, $lparam ) {
+        my $cd    = cast( $lparam, NMLVCUSTOMDRAW() );
+        my $stage = $cd->{dwDrawStage};
+        if ( $stage == 0x00000001 ) {    # CDDS_PREPAINT
+            return 0x00000020;           # CDRF_NOTIFYITEMDRAW
+        }
+        elsif ( $stage == 0x00010001 ) {    # CDDS_ITEMPREPAINT
+            return 0x00000020;              # CDRF_NOTIFYSUBITEMDRAW
+        }
+        elsif ( $stage == 0x00030001 ) {    # CDDS_SUBITEM | CDDS_ITEMPREPAINT
+            my $row_idx = $cd->{dwItemSpec};
+            my $col_idx = $cd->{iSubItem};
+            my $node    = $record->{node};
+            my $cols    = $node->columns // [];
+            return 0 if $col_idx > $#$cols;
+            my $col  = $cols->[$col_idx];
+            my $type = $col->{type} // 'text';
+            if ( $type eq 'progress_bar' || $type eq 'badge' ) {
+                my $hwnd = $record->{hwnd};
+                my $hdc  = $cd->{hdc};
+                my $row;
+
+                # Fetch row data transparently (works for both virtual and standard lists)
+                if ( $node->on_row ) {
+                    $row = $node->on_row->($row_idx);
+                }
+                else {
+                    my $rows = $node->rows // [];
+                    return 0 if $row_idx > $#$rows;
+                    $row = $rows->[$row_idx];
+                }
+                my $cid = $col->{id} // $col->{text} // '';
+                my $val = ref $row eq 'HASH' ? ( $row->{$cid} // '' ) : ( $row->[$col_idx] // '' );
+
+                # Query exact sub-item rectangle
+                my $rptr = malloc( sizeof( RECT() ) );
+                my $r    = cast( $rptr, RECT() );
+                $r->{top}  = $col_idx;
+                $r->{left} = 0;                                                    # LVIR_BOUNDS
+                SendMessageW( $hwnd, 0x1038, $row_idx, Affix::address($rptr) );    # LVM_GETSUBITEMRECT
+                if ( $type eq 'progress_bar' ) {
+                    $self->_draw_cell_progress_bar( $hdc, $rptr, $val );
+                }
+                elsif ( $type eq 'badge' ) {
+                    $self->_draw_cell_badge( $hdc, $rptr, $val );
+                }
+                free($rptr);
+                return 0x00000004;                                                 # CDRF_SKIPDEFAULT (do not draw standard text over our graphics)
+            }
+        }
+        return 0;                                                                  # CDRF_DODEFAULT
+    }
+
+    method _draw_cell_progress_bar ( $hdc, $rptr, $val ) {
+        my $r = cast( $rptr, RECT() );
+        my ( $x1, $y1, $x2, $y2 ) = ( $r->{left} + 4, $r->{top} + 3, $r->{right} - 4, $r->{bottom} - 3 );
+        return if $x2 <= $x1 || $y2 <= $y1;
+
+        # Background track
+        my $track_rptr = malloc( sizeof( RECT() ) );
+        my $tr         = cast( $track_rptr, RECT() );
+        $tr->{left}   = $x1;
+        $tr->{top}    = $y1;
+        $tr->{right}  = $x2;
+        $tr->{bottom} = $y2;
+        my $track_br = CreateSolidBrush(0x00EFECE8);    # subtle grey track
+        FillRect( $hdc, $track_rptr, $track_br );
+        DeleteObject($track_br);
+        my ($num) = "$val" =~ /([\d.]+)/;
+        $num = 0 unless defined $num;
+        $num = 100 if $num > 100;
+
+        # Fill bar
+        my $fill_w = int( ( $x2 - $x1 ) * ( $num / 100 ) );
+        if ( $fill_w > 0 ) {
+            my $fill_rptr = malloc( sizeof( RECT() ) );
+            my $fr        = cast( $fill_rptr, RECT() );
+            $fr->{left}   = $x1;
+            $fr->{top}    = $y1;
+            $fr->{right}  = $x1 + $fill_w;
+            $fr->{bottom} = $y2;
+
+            # Modern blue fill (#0078D4 = BGR 0x00D47800)
+            my $fill_br = CreateSolidBrush(0x00D47800);
+            FillRect( $hdc, $fill_rptr, $fill_br );
+            DeleteObject($fill_br);
+            free($fill_rptr);
+        }
+
+        # Border outline
+        my $frame_br = CreateSolidBrush(0x00DAD4CE);
+        FrameRect( $hdc, $track_rptr, $frame_br );
+        DeleteObject($frame_br);
+
+        # Centered percentage label
+        SetBkMode( $hdc, 1 );                                                    # TRANSPARENT
+        SetTextColor( $hdc, 0x00000000 );
+        DrawTextW( $hdc, "$val", -1, $track_rptr, 0x0001 | 0x0004 | 0x0020 );    # DT_CENTER | DT_VCENTER | DT_SINGLELINE
+        free($track_rptr);
+    }
+
+    method _draw_cell_badge ( $hdc, $rptr, $val ) {
+        my $r = cast( $rptr, RECT() );
+        my ( $x1, $y1, $x2, $y2 ) = ( $r->{left} + 6, $r->{top} + 3, $r->{right} - 6, $r->{bottom} - 3 );
+        return if $x2 <= $x1 || $y2 <= $y1;
+
+        # Color palettes (BGR): Green for Running, Amber for Idle/Warning, Red for Suspended/Error
+        my ( $bg_color, $fg_color, $border_color );
+        my $v = lc "$val";
+        if ( $v =~ /^(?:running|active|done|success|ok)$/ ) {
+            $bg_color     = 0x00D4EDDA;    # Soft Green
+            $fg_color     = 0x00155724;    # Dark Green text
+            $border_color = 0x00C3E6CB;
+        }
+        elsif ( $v =~ /^(?:idle|pending|warning|pause)$/ ) {
+            $bg_color     = 0x00FFF3CD;    # Soft Amber
+            $fg_color     = 0x00856404;    # Dark Amber text
+            $border_color = 0x00FFEEBA;
+        }
+        elsif ( $v =~ /^(?:suspended|error|failed|dead|stopped)$/ ) {
+            $bg_color     = 0x00F8D7DA;    # Soft Red
+            $fg_color     = 0x00721C24;    # Dark Red text
+            $border_color = 0x00F5C6CB;
+        }
+        else {
+            $bg_color     = 0x00E2E3E5;    # Soft Grey
+            $fg_color     = 0x00383D41;
+            $border_color = 0x00D6D8DB;
+        }
+        my $badge_rptr = malloc( sizeof( RECT() ) );
+        my $br         = cast( $badge_rptr, RECT() );
+        $br->{left}   = $x1;
+        $br->{top}    = $y1;
+        $br->{right}  = $x2;
+        $br->{bottom} = $y2;
+        my $b_brush = CreateSolidBrush($bg_color);
+        FillRect( $hdc, $badge_rptr, $b_brush );
+        DeleteObject($b_brush);
+        my $f_brush = CreateSolidBrush($border_color);
+        FrameRect( $hdc, $badge_rptr, $f_brush );
+        DeleteObject($f_brush);
+        SetBkMode( $hdc, 1 );
+        SetTextColor( $hdc, $fg_color );
+        DrawTextW( $hdc, "$val", -1, $badge_rptr, 0x0001 | 0x0004 | 0x0020 );
+        free($badge_rptr);
+    }
+
+    method _start_inplace_edit ( $record, $row_idx, $col_idx ) {
+        return if $active_inplace_edit;
+        my $hwnd = $record->{hwnd};
+        my $node = $record->{node};
+        my $cols = $node->columns // [];
+        return if $col_idx > $#$cols;
+        my $col    = $cols->[$col_idx];
+        my $col_id = $col->{id} // $col->{text};
+
+        # Query exact cell rectangle (LVM_GETSUBITEMRECT = 0x1038)
+        my $rptr = malloc( sizeof( RECT() ) );
+        my $r    = cast( $rptr, RECT() );
+        $r->{top}  = $col_idx;
+        $r->{left} = 0;          # LVIR_BOUNDS
+        SendMessageW( $hwnd, 0x1038, $row_idx, Affix::address($rptr) );
+
+        # Extract current cell text
+        my $current_text = '';
+        if ( $node->on_row ) {
+            my $row = $node->on_row->($row_idx);
+            $current_text = ref $row eq 'HASH' ? ( $row->{$col_id} // '' ) : ( $row->[$col_idx] // '' );
+        }
+        elsif ( $row_idx >= 0 && $row_idx < @{ $node->rows // [] } ) {
+            my $row = $node->rows->[$row_idx];
+            $current_text = ref $row eq 'HASH' ? ( $row->{$col_id} // '' ) : ( $row->[$col_idx] // '' );
+        }
+
+        # Create floating in-place EDIT control directly over the cell
+        # Inset slightly so it fits inside the cell gridline boundaries
+        my ( $x, $y, $w, $h ) = ( $r->{left} + 1, $r->{top} + 1, ( $r->{right} - $r->{left} ) - 2, ( $r->{bottom} - $r->{top} ) - 2 );
+        free($rptr);
+        my $style     = 0x50800080;    # WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL
+        my $edit_hwnd = CreateWindowExW( 0, 'EDIT', $current_text, $style, $x, $y, $w, $h, $hwnd, 9999, undef, undef );
+        $self->_apply_font($edit_hwnd);
+        SetFocus($edit_hwnd);
+        SendMessageW( $edit_hwnd, 0x00B1, 0, -1 );    # EM_SETSEL (highlight text)
+
+        # Install native subclass procedure using SetWindowSubclass
+        my $self_ref = $self;
+        my $subclass_cb;
+        $subclass_cb = sub ( $ehwnd, $emsg, $ewp, $elp, $uIdSubclass, $dwRefData ) {
+            if ( $emsg == 0x0100 ) {                  # WM_KEYDOWN
+                if ( $ewp == 0x0D ) {                 # VK_RETURN (Enter key: commit)
+                    $self_ref->_commit_inplace_edit(1);
+                    return 0;
+                }
+                elsif ( $ewp == 0x1B ) {              # VK_ESCAPE (Escape key: cancel)
+                    $self_ref->_commit_inplace_edit(0);
+                    return 0;
+                }
+            }
+            elsif ( $emsg == 0x0008 ) {               # WM_KILLFOCUS (clicked outside: commit)
+                $self_ref->_commit_inplace_edit(1);
+                return 0;
+            }
+            return DefSubclassProc( $ehwnd, $emsg, $ewp, $elp );
+        };
+        SetWindowSubclass( $edit_hwnd, $subclass_cb, 1001, 0 );
+        $active_inplace_edit = { record => $record, edit_hwnd => $edit_hwnd, row_idx => $row_idx, col_id => $col_id, subclass_cb => $subclass_cb };
+    }
+
+    method _commit_inplace_edit ($commit) {
+        return unless $active_inplace_edit;
+        my $info = $active_inplace_edit;
+        $active_inplace_edit = undef;
+        my $edit_hwnd   = $info->{edit_hwnd};
+        my $record      = $info->{record};
+        my $node        = $record->{node};
+        my $subclass_cb = $info->{subclass_cb};
+        RemoveWindowSubclass( $edit_hwnd, $subclass_cb, 1001 ) if $subclass_cb;
+
+        if ( $commit && $node->on_edit ) {
+            my $new_text = $self->_get_text($edit_hwnd);
+            my $msg      = $node->on_edit->( $info->{row_idx}, $info->{col_id}, $new_text );
+            $channel->put($msg) if $msg;
+        }
+        DestroyWindow($edit_hwnd);
+        SetFocus( $record->{hwnd} );
+        RedrawWindow( $record->{hwnd}, undef, undef, 0x0185 );
     }
 };
 1;

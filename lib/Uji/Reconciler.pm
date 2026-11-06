@@ -53,6 +53,13 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
+        # Check scroll_to_row (ListView)
+        if ( $old_node->can('scroll_to_row') && $new_node->can('scroll_to_row') ) {
+            if ( ( $old_node->scroll_to_row // -1 ) != ( $new_node->scroll_to_row // -1 ) ) {
+                $driver->set_prop( $new_node->id, 'scroll_to_row', $new_node->scroll_to_row );
+            }
+        }
+
         # Check title (Window)
         if ( $old_node->can('title') && $new_node->can('title') ) {
             if ( ( $old_node->title // '' ) ne ( $new_node->title // '' ) ) {
@@ -161,10 +168,37 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
             }
         }
 
-        # Check selected (TabPanel)
+        # Check selected (TabPanel / ListView)
         if ( $old_node->can('selected') && $new_node->can('selected') ) {
-            if ( ( $old_node->selected // 0 ) != ( $new_node->selected // 0 ) ) {
+            my $changed = 0;
+            my $os      = $old_node->selected;
+            my $ns      = $new_node->selected;
+            if ( ref $os eq 'ARRAY' && ref $ns eq 'ARRAY' ) {
+                $changed = 1 unless @$os == @$ns;
+                unless ($changed) {
+                    for my $i ( 0 .. $#$os ) {
+                        if ( $os->[$i] != $ns->[$i] ) { $changed = 1; last; }
+                    }
+                }
+            }
+            elsif ( ref $os eq 'ARRAY' || ref $ns eq 'ARRAY' ) {
+                $changed = 1;
+            }
+            else {
+                $changed = 1 if ( $os // -1 ) != ( $ns // -1 );
+            }
+            if ($changed) {
                 $driver->set_prop( $new_node->id, 'selected', $new_node->selected );
+            }
+        }
+
+        # Check ListView columns vs rows
+        if ( $new_node->type eq 'list_view' ) {
+            if ( $self->_list_view_columns_changed( $old_node, $new_node ) ) {
+                $driver->set_prop( $new_node->id, 'columns', $new_node );
+            }
+            elsif ( $self->_list_view_data_changed( $old_node, $new_node ) ) {
+                $driver->set_prop( $new_node->id, 'rows', $new_node );
             }
         }
 
@@ -255,6 +289,66 @@ class Uji::Reconciler v0.0.1 {    # VDOM diffing and patching engine
 
         # Mount brand-new children passing current container node ID
         $driver->mount_widget( $_, $new_node->id ) for @to_mount;
+    }
+
+    method _list_view_columns_changed ( $old_node, $new_node ) {
+        my $old_cols = $old_node->columns // [];
+        my $new_cols = $new_node->columns // [];
+        return 1 unless @$old_cols == @$new_cols;
+        for my $i ( 0 .. $#$old_cols ) {
+            return 1 if ( $old_cols->[$i]{id}    // '' ) ne ( $new_cols->[$i]{id}    // '' );
+            return 1 if ( $old_cols->[$i]{text}  // '' ) ne ( $new_cols->[$i]{text}  // '' );
+            return 1 if ( $old_cols->[$i]{type}  // '' ) ne ( $new_cols->[$i]{type}  // '' );
+            return 1 if ( $old_cols->[$i]{align} // '' ) ne ( $new_cols->[$i]{align} // '' );
+            return 1 if ( $old_cols->[$i]{width} // '' ) ne ( $new_cols->[$i]{width} // '' );
+        }
+        return 0;
+    }
+
+    method _list_view_data_changed ( $old_node, $new_node ) {
+        return 1 if ( $old_node->sort_column    // '' ) ne ( $new_node->sort_column       // '' );
+        return 1 if ( $old_node->sort_direction // 'asc' ) ne ( $new_node->sort_direction // 'asc' );
+        return 1 if ( $old_node->multiselect    // 0 ) != ( $new_node->multiselect // 0 );
+        return 1 if ( $old_node->checkboxes     // 0 ) != ( $new_node->checkboxes  // 0 );
+        return 1 if ( $old_node->virtual        // 0 ) != ( $new_node->virtual     // 0 );
+
+        # In virtual mode, always refresh when the view re-renders so on_row reflects the latest model data
+        if ( $new_node->virtual ) {    # XXX - This could waste a lot of cycles; we need to diff old vs. new virtual data somehow
+            return 1;
+        }
+        my $old_cols = $old_node->columns // [];
+        my $new_cols = $new_node->columns // [];
+        return 1 unless @$old_cols == @$new_cols;
+        for my $i ( 0 .. $#$old_cols ) {
+            return 1 if ( $old_cols->[$i]{text}     // '' ) ne ( $new_cols->[$i]{text}  // '' );
+            return 1 if ( $old_cols->[$i]{width}    // '' ) ne ( $new_cols->[$i]{width} // '' );
+            return 1 if ( $old_cols->[$i]{type}     // '' ) ne ( $new_cols->[$i]{type}  // '' );
+            return 1 if ( $old_cols->[$i]{editable} // 0 ) != ( $new_cols->[$i]{editable} // 0 );
+        }
+        my $old_rows = $old_node->rows // [];
+        my $new_rows = $new_node->rows // [];
+        return 1 unless @$old_rows == @$new_rows;
+        for my $r ( 0 .. $#$old_rows ) {
+            my $or = $old_rows->[$r];
+            my $nr = $new_rows->[$r];
+            if ( ref $or eq 'HASH' && ref $nr eq 'HASH' ) {
+                return 1 if ( $or->{checked} // 0 ) != ( $nr->{checked} // 0 );
+                for my $col (@$new_cols) {
+                    my $cid = $col->{id} // $col->{text} // '';
+                    return 1 if ( $or->{$cid} // '' ) ne ( $nr->{$cid} // '' );
+                }
+            }
+            elsif ( ref $or eq 'ARRAY' && ref $nr eq 'ARRAY' ) {
+                return 1 unless @$or == @$nr;
+                for my $c ( 0 .. $#$or ) {
+                    return 1 if ( $or->[$c] // '' ) ne ( $nr->[$c] // '' );
+                }
+            }
+            else {
+                return 1 if ( $or // '' ) ne ( $nr // '' );
+            }
+        }
+        return 0;
     }
 };
 1;

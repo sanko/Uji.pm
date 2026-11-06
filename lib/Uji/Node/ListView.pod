@@ -1,0 +1,311 @@
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+Uji::Node::ListView - Multi-column tabular grid, virtualized dataset, and report data view
+
+=head1 SYNOPSIS
+
+    use Uji;
+
+    # Basic tabular data display
+    Uji::list_view(
+        flex      => 1,
+        columns   => [
+            { id => 'pid',    text => 'PID',          width => 75,  align => 'right' },
+            { id => 'name',   text => 'Process Name', width => 200, align => 'left'  },
+            { id => 'status', text => 'Status',       width => 100, align => 'center' }
+        ],
+        rows      => [
+            { pid => '1048', name => 'perl.exe',   status => 'Running' },
+            { pid => '2104', name => 'chrome.exe', status => 'Running' }
+        ],
+        selected  => $model->{selected_idx},
+        on_select => sub ( $idx, $row ) {
+            { type => 'SELECT_PROCESS', index => $idx, row => $row }
+        }
+    );
+
+    # Full-featured data table: Multi-select, sorting, checkboxes, and cell widgets
+    Uji::list_view(
+        flex           => 1,
+        multiselect    => 1,
+        checkboxes     => 1,
+        column_reorder => 1,
+        gridlines      => 1,
+        sort_column    => $model->{sort_col},
+        sort_direction => $model->{sort_dir},
+        on_sort        => sub ( $col_id, $dir ) {
+            { type => 'SORT_TABLE', col => $col_id, dir => $dir }
+        },
+        on_activate    => sub ( $idx, $row ) {
+            { type => 'INSPECT_ROW', row => $row }
+        },
+        on_check       => sub ( $idx, $row, $checked ) {
+            { type => 'TOGGLE_CHECK', id => $row->{pid}, checked => $checked }
+        },
+        context_menu   => sub ( $indices, $rows ) {
+            Uji::menu( items => [
+                Uji::menu_item( label => 'Inspect',  on_click => { type => 'INSPECT', row => $rows->[0] } ),
+                Uji::menu_item( label => 'Terminate', on_click => { type => 'KILL', rows => $rows } )
+            ] );
+        },
+        columns        => [
+            { id => 'pid',    text => 'PID',         width => 75,  align => 'right' },
+            { id => 'name',   text => 'Name',        width => 190, align => 'left', editable => 1 },
+            { id => 'cpu',    text => 'CPU Load',    width => 120, align => 'center', type => 'progress_bar' },
+            { id => 'status', text => 'State',       width => 100, align => 'center', type => 'badge' }
+        ],
+        rows           => $model->{processes},
+        selected       => $model->{selected_indices},
+        on_select      => sub ( $indices, $rows ) {
+            { type => 'SELECTION_CHANGED', indices => $indices, rows => $rows }
+        },
+        on_edit        => sub ( $row_idx, $col_id, $new_text ) {
+            { type => 'RENAME_PROCESS', idx => $row_idx, col => $col_id, name => $new_text }
+        }
+    );
+
+    # Virtualized 100,000,000-Row Dataset with In-Place Editing and Scrolling Jumps
+    Uji::list_view(
+        flex          => 1,
+        virtual       => 1,
+        row_count     => 100_000_000,
+        scroll_to_row => $model->{jump_target}, # Jump to a specific row natively
+        on_row        => sub ($idx) {
+            return {
+                id    => $idx + 1,
+                name  => "Task_Item_$idx.dat",
+                state => 'Active'
+            };
+        },
+        on_edit       => sub ( $r_idx, $col_id, $val ) {
+            { type => 'EDIT_VIRTUAL_CELL', row => $r_idx, col => $col_id, val => $val }
+        },
+        columns       => [
+            { id => 'id',   text => 'ID',   width => 80 },
+            { id => 'name', text => 'File', width => 250, editable => 1 }
+        ]
+    );
+
+=head1 DESCRIPTION
+
+C<Uji::Node::ListView> is a high-performance, multi-column tabular report view. It renders as a native OS table (Win32
+C<SysListView32> in report mode, Cocoa C<NSTableView>, or GTK4 C<GtkColumnView>) and dispatches declarative TEA
+messages on row selection, column sorting, activation (double-click/Enter), checkbox toggling, in-place cell editing,
+and right-click actions.
+
+It supports both standard static datasets and B<virtualized mode> (handling datasets of 100,000,000+ rows instantly
+with zero memory overhead) and B<in-place cell editing>.
+
+=head1 Constructor
+
+=head2 C<new ( %params )>
+
+You normally never call C<new> directly. The L<Uji|Uji/list_view> helper is exported by default:
+
+    Uji::list_view( columns => [...], rows => [...] );
+
+=head3 Parameters
+
+=head4 C<columns>
+
+An arrayref of column definition hashrefs. Each column supports:
+
+=over
+
+=item * C<id> - Unique string identifier used to extract cell values from row hashrefs.
+
+=item * C<text> - The header label drawn in the column header bar.
+
+=item * C<width> - Pixel width (e.g. C<120>), or C<'auto'> to automatically size the column to fit content.
+
+=item * C<align> - Text alignment: C<'left'> (default), C<'center'>, or C<'right'>.
+
+=item * C<type> - Custom cell renderer: C<'text'> (default), C<'progress_bar'>, or C<'badge'>.
+C<'progress_bar'> renders a themed progress meter directly in the cell. C<'badge'> paints a colored status pill.
+
+=item * C<editable> - Boolean (default C<0>). When true, double-clicking the cell or pressing B<F2> opens an in-place
+text editor directly over the cell.
+
+=back
+
+=head4 C<rows>
+
+An arrayref of row data. In non-virtual mode, rows are provided as hashrefs or arrayrefs.
+
+=head4 C<virtual>
+
+Boolean (default C<0>). When set to C<1>, enables OS-level virtualized owner-data mode (Win32 C<LVS_OWNERDATA>, Cocoa
+C<NSTableViewDataSource>, GTK4 C<GtkSignalListItemFactory>). The table does not allocate native items for the entire
+dataset upfront; instead, rows are requested on-demand only for visible rows in the viewport.
+
+=head4 C<row_count>
+
+Integer. Total number of rows in L</virtual> mode. Defaults to C<scalar(@$rows)>.
+
+=head4 C<on_row>
+
+A callback C<sub ($row_index) { ... }> invoked in L</virtual> mode when the OS requests row data for visible cells.
+Must return a hashref or arrayref for that row index.
+
+=head4 C<on_edit>
+
+A callback fired when in-place cell editing is committed (user presses B<Enter> or clicks outside):
+
+    on_edit => sub ( $row_index, $col_id, $new_text ) {
+        { type => 'CELL_EDITED', row => $row_index, col => $col_id, text => $new_text }
+    }
+
+=head4 C<selected>
+
+The selected row index (0-based integer, or C<-1> for none). When L</multiselect> is enabled, this can be an arrayref
+of integers (e.g. C<[ 0, 2, 5 ]>).
+
+=head4 C<scroll_to_row>
+
+An integer index. If set to a value C<E<gt>= 0>, the native list view will instantly scroll its viewport to ensure the
+target row is visible. Set to C<-1> to allow the user to freely scroll without being snapped back.
+
+=head4 C<on_select>
+
+Callback fired when selection changes. In single-select mode, passes C<($index, $row)>:
+
+    on_select => sub ( $idx, $row ) { { type => 'SELECT_ROW', row => $row } }
+
+In L</multiselect> mode, passes C<($indices_arrayref, $rows_arrayref)>:
+
+    on_select => sub ( $indices, $rows ) { { type => 'SELECT_MULTI', rows => $rows } }
+
+=head4 C<on_activate>
+
+Callback fired when a row is double-clicked or activated via the B<Enter> key (on non-editable cells):
+
+    on_activate => sub ( $index, $row ) { { type => 'OPEN_DETAILS', row => $row } }
+
+=head4 C<on_check>
+
+Callback fired when a row's native checkbox is clicked or toggled via the spacebar (requires L</checkboxes>):
+
+    on_check => sub ( $index, $row, $checked ) {
+        { type => 'ROW_CHECKED', id => $row->{id}, is_checked => $checked }
+    }
+
+=head4 C<on_sort>
+
+Callback fired when the user clicks a column header:
+
+    on_sort => sub ( $col_id, $direction ) {
+        { type => 'SORT_TABLE', col => $col_id, dir => $direction }
+    }
+
+=head4 C<sort_column>
+
+The column C<id> currently sorted by. Renders the native visual sort arrow glyph on that column header.
+
+=head4 C<sort_direction>
+
+C<'asc'> (ascending, default) or C<'desc'> (descending). Renders the sort indicator arrow ($\uparrow$ or $\downarrow$).
+
+=head4 C<multiselect>
+
+Boolean (default C<0>). When C<1>, enables native B<Ctrl+Click>, B<Shift+Click> range selection, and B<Ctrl+A>.
+
+=head4 C<checkboxes>
+
+Boolean (default C<0>). When C<1>, displays native interactive checkboxes in the first column. Works transparently in
+both standard and L</virtual> modes.
+
+=head4 C<context_menu>
+
+A menu definition, or a dynamic builder coderef invoked when a row is right-clicked.
+
+=head4 C<gridlines>
+
+Boolean (default C<1>). Displays subtle horizontal and vertical cell gridlines.
+
+=head4 C<full_row_select>
+
+Boolean (default C<1>). Clicking anywhere across a row selects the entire row.
+
+=head4 C<column_reorder>
+
+Boolean (default C<1>). Allows users to drag and drop column headers to reorder columns on screen.
+
+=head1 Methods
+
+Readers are available for all parameters.
+
+=head2 C<total_row_count>
+
+Returns the total count of rows (either C<row_count> if defined, or C<scalar(@$rows)>).
+
+=head2 C<type>
+
+Returns the string C<'list_view'>.
+
+=head1 How it Works
+
+=over
+
+=item * B<Win32>:
+Created as a C<SysListView32> control with C<LVS_REPORT | LVS_SHOWSELALWAYS | WS_BORDER | WS_CLIPSIBLINGS>.
+In virtual mode, C<LVS_OWNERDATA> (C<0x1000>) is set and rows are sized via C<LVM_SETITEMCOUNT>; data is populated
+lazily on-demand in C<LVN_GETDISPINFOW>. In-place editing queries the cell rectangle via C<LVM_GETSUBITEMRECT> and
+creates a subclassed floating C<EDIT> control that traps Enter and Escape via C<SetWindowSubclass>. Progress bars and
+badges are rendered through GDI in sub-item C<NM_CUSTOMDRAW> passes without child window overhead. Virtual check states
+are processed securely via C<LVHT_ONITEMSTATEICON> hit tests on C<NM_CLICK>.
+
+=item * B<macOS (Cocoa)>:
+Maps to a view-based C<NSTableView> with C<NSTableColumn> headers. Virtual mode uses C<NSTableViewDataSource>. Editable
+columns set C<[cellView.textField setEditable:YES]>.
+
+=item * B<Linux (GTK4)>:
+Maps to a C<GtkColumnView> with C<GtkSignalListItemFactory>, which natively virtualizes rows using a C<GListModel>.
+Editable columns bind to C<GtkEditableLabel>.
+
+=back
+
+=head1 SEE ALSO
+
+=over
+
+=item * L<Uji> - The toolkit entry point (exports C<list_view>)
+
+=item * L<Uji::Node> - The base node class and shared parameters
+
+=item * L<Uji::Node::ListBox> - Single-column simple option list
+
+=item * L<Uji::Node::ScrollView> - Hardware-clipped scrollable container
+
+=item * L<Uji::App>, L<Uji::Reconciler> - The TEA runtime and diffing engine
+
+=back
+
+=head1 LICENSE
+
+This software is Copyright (c) 2026 by Sanko Robinson.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+See the F<LICENSE> file for full text.
+
+=head1 AUTHOR
+
+Sanko Robinson - L<https://github.com/sanko>
+
+=begin stopwords
+
+hashref flex multiselect listview listviews SysListView32 LVS_REPORT LVS_EX_FULLROWSELECT LVS_EX_GRIDLINES
+LVS_EX_DOUBLEBUFFER LVS_EX_HEADERDRAGDROP LVS_EX_CHECKBOXES HDF_SORTUP HDF_SORTDOWN NM_CUSTOMDRAW NM_DBLCLK NM_RETURN
+LVN_ITEMCHANGED LVN_COLUMNCLICK WM_CONTEXTMENU GtkColumnView NSTableView subitem subitems HDITEMW LVS_OWNERDATA
+LVM_SETITEMCOUNT LVN_GETDISPINFOW LVM_GETSUBITEMRECT NMITEMACTIVATE LVM_ENSUREVISIBLE SetWindowSubclass
+LVHT_ONITEMSTATEICON NM_CLICK
+
+=end stopwords
+
+=cut

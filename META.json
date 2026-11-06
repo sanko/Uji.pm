@@ -100,6 +100,10 @@
          "file" : "lib/Uji/Node/ListBox.pm",
          "version" : "v0.0.1"
       },
+      "Uji::Node::ListView" : {
+         "file" : "lib/Uji/Node/ListView.pm",
+         "version" : "v0.0.1"
+      },
       "Uji::Node::Menu" : {
          "file" : "lib/Uji/Node/Menu.pm",
          "version" : "v0.0.1"
@@ -154,6 +158,18 @@
       },
       "Uji::Node::SpinBox" : {
          "file" : "lib/Uji/Node/SpinBox.pm",
+         "version" : "v0.0.1"
+      },
+      "Uji::Node::SplitView" : {
+         "file" : "lib/Uji/Node/SplitView.pm",
+         "version" : "v0.0.1"
+      },
+      "Uji::Node::Tab" : {
+         "file" : "lib/Uji/Node/Tab.pm",
+         "version" : "v0.0.1"
+      },
+      "Uji::Node::TabPanel" : {
+         "file" : "lib/Uji/Node/TabPanel.pm",
          "version" : "v0.0.1"
       },
       "Uji::Node::Text" : {
