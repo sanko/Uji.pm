@@ -52,34 +52,32 @@ native FFI via Affix. This is a testbed for cooperative fibers via Acme::Paratax
 - [x] `DatePicker` (Calendar-based date entry)
 
 ### Buttons & Static Display
-- [ ] `ToggleButton` (Sticky push style, `checked` state)
+- [x] `ToggleButton` (Sticky push style, `checked` state)
 - [ ] `LinkButton` (Hyperlink styling, `on_click`)
 - [ ] `Image` (Loads/displays static raster from data or path)
 - [ ] `Canvas` (Raw 2D drawing surface; `on_draw` callback)
-- [ ] `ProgressBar` (Determinate/indeterminate `value`)
-- [ ] `Spinner` (Activity indicator, no value)
-- [ ] `StatusText` (Subtle footer/hint text)
+- [x] `ProgressBar` (Determinate/indeterminate `value`)
+- [x] `Spinner` (Activity indicator, no value)
 
 ### Layout & Containers
 - [x] `Column` + `Row` (Flex containers with padding/spacing/alignment)
-- [ ] `TabPanel` (Tabbed sub-views; `panels => [...]`, `on_select`)
-- [ ] `ScrollView` (Clipping + scrollable region, `orientation`)
-- [ ] `SplitView` (Movable divider between two panes, `orientation`)
-- [ ] `GroupBox` (Labeled visual grouping of children)
-- [ ] `Spacer` (Explicit flexible whitespace, flex-aware)
+- [x] `TabPanel` (Tabbed sub-views; `panels => [...]`, `on_select`)
+- [x] `ScrollView` (Clipping + scrollable region, `orientation`)
+- [x] `SplitView` (Movable divider between two panes, `orientation`)
+- [x] `GroupBox` (Labeled visual grouping of children)
+- [x] `Spacer` (Explicit flexible whitespace, flex-aware)
 - [ ] `Overlay` (Stack children on top of previous; e.g. badge on image)
 
 ### Data Display & Navigation
 - [ ] `ListView` (Multi-column table; `columns =>`, `rows =>`, `on_select`)
 - [ ] `TreeView` (Hierarchical data; `nodes =>`, `on_select`)
-- [ ] `StatusBar` (Bottom-of-window status region)
 - [ ] `Toolbar` (Row of icon/text actions)
-- [ ] `Menu` / `MenuBar` (Application-level menus, accelerators)
+- [x] `Menu` / `MenuBar` (Application-level menus, accelerators)
 
 ### Polling & Dialogs (system-level)
-- [ ] `FileOpenDialog` (Native file picker)
-- [ ] `FileSaveDialog`
-- [ ] `MessageBox` (App-modal alert/confirm)
+- [x] `FileOpenDialog` (Native file picker)
+- [x] `FileSaveDialog`
+- [x] `MessageBox` (App-modal alert/confirm)
 - [ ] `PromptDialog` (Ask for a string value)
 - [ ] `ColorPicker`
 
@@ -93,7 +91,7 @@ native FFI via Affix. This is a testbed for cooperative fibers via Acme::Paratax
   - [x] Standard controls (`STATIC`, `BUTTON`, `EDIT`)
   - [x] Common controls (`TRACKBAR` slider, via `InitCommonControlsEx`)
   - [x] Event routing via `WM_COMMAND` (`BN_CLICKED`, `EN_CHANGE`) + `WM_HSCROLL`
-  - [ ] Standard system font application (replace default bitmap font with Segoe UI)
+  - [x] Standard system font application (replace default bitmap font with Segoe UI)
   - [x] Window resize handling (`WM_SIZE` -> re-layout pass)
   - [x] Checkbox / radio button mapping (`BS_AUTOCHECKBOX`, `BS_AUTORADIOBUTTON`)
   - [x] Combo/list box mapping (`CB_`, `LB_` messages, `WM_COMMAND` notifications)
