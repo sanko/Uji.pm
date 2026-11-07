@@ -4,192 +4,243 @@
 
 =head1 NAME
 
-Uji::Node::ListView - a multi-column, scrollable selection list (a table)
+Uji::Node::ListView - Multi-column tabular grid, virtualized dataset, and report data view
 
 =head1 SYNOPSIS
 
     use Uji;
 
+    # Basic tabular data display
     Uji::list_view(
-        value   => $model->{sku},
-        columns => [
-            { label => 'SKU',   width => 120 },
-            { label => 'Name',  width => 200 },
-            { label => 'Price', width => 80 },
+        flex      => 1,
+        columns   => [
+            { id => 'pid',    text => 'PID',          width => 75,  align => 'right' },
+            { id => 'name',   text => 'Process Name', width => 200, align => 'left'  },
+            { id => 'status', text => 'Status',       width => 100, align => 'center' }
         ],
-        rows => [
-            ['AB-12', 'Apples',  '3'],
-            ['AB-21', 'Bananas', '2'],
-            { value => 'CD-34', columns => ['CD-34', 'Cherries', '5'] },   # value defaults to the first cell
+        rows      => [
+            { pid => '1048', name => 'perl.exe',   status => 'Running' },
+            { pid => '2104', name => 'chrome.exe', status => 'Running' }
         ],
-        on_select => sub ($v) { { type => 'SET_SKU', value => $v } }
+        selected  => $model->{selected_idx},
+        on_select => sub ( $idx, $row ) {
+            { type => 'SELECT_PROCESS', index => $idx, row => $row }
+        }
     );
 
-    # Multi-select: value is an arrayref of selected row values.
+    # Full-featured data table: Multi-select, sorting, checkboxes, and cell widgets
     Uji::list_view(
-        multiple => 1,
-        value    => ['AB-12', 'CD-34'],
-        columns  => [ { label => 'SKU', width => 120 } ],
-        rows     => [
-            { value => 'AB-12', columns => ['AB-12'] },
-            { value => 'AB-21', columns => ['AB-21'] },
-            { value => 'CD-34', columns => ['CD-34'] },
+        flex           => 1,
+        multiselect    => 1,
+        checkboxes     => 1,
+        column_reorder => 1,
+        gridlines      => 1,
+        sort_column    => $model->{sort_col},
+        sort_direction => $model->{sort_dir},
+        on_sort        => sub ( $col_id, $dir ) {
+            { type => 'SORT_TABLE', col => $col_id, dir => $dir }
+        },
+        on_activate    => sub ( $idx, $row ) {
+            { type => 'INSPECT_ROW', row => $row }
+        },
+        on_check       => sub ( $idx, $row, $checked ) {
+            { type => 'TOGGLE_CHECK', id => $row->{pid}, checked => $checked }
+        },
+        context_menu   => sub ( $indices, $rows ) {
+            Uji::menu( items => [
+                Uji::menu_item( label => 'Inspect',  on_click => { type => 'INSPECT', row => $rows->[0] } ),
+                Uji::menu_item( label => 'Terminate', on_click => { type => 'KILL', rows => $rows } )
+            ] );
+        },
+        columns        => [
+            { id => 'pid',    text => 'PID',         width => 75,  align => 'right' },
+            { id => 'name',   text => 'Name',        width => 190, align => 'left', editable => 1 },
+            { id => 'cpu',    text => 'CPU Load',    width => 120, align => 'center', type => 'progress_bar' },
+            { id => 'status', text => 'State',       width => 100, align => 'center', type => 'badge' }
         ],
-        on_select => sub ($v) { { type => 'SET_PICKS', value => $v } }    # $v is an arrayref
+        rows           => $model->{processes},
+        selected       => $model->{selected_indices},
+        on_select      => sub ( $indices, $rows ) {
+            { type => 'SELECTION_CHANGED', indices => $indices, rows => $rows }
+        },
+        on_edit        => sub ( $row_idx, $col_id, $new_text ) {
+            { type => 'RENAME_PROCESS', idx => $row_idx, col => $col_id, name => $new_text }
+        }
     );
 
-    # Sortable columns, drag-to-reorder, and a formatted money column.
+    # Virtualized 100,000,000-Row Dataset with In-Place Editing and Scrolling Jumps
     Uji::list_view(
-        sortable    => 1,
-        reorderable => 1,
-        columns => [
-            { label => 'SKU',   width => 120 },
-            { label => 'Price', width => 80, format => '$%0.2f', sort => 'numeric' },
-        ],
-        rows  => [
-            ['AB-12', '3'],
-            ['AB-21', '2'],
-        ],
-        on_sort    => sub ($col, $dir) { { type => 'RESORT', column => $col, dir => $dir } },    # re-sort your own rows here
-        on_reorder => sub ($order) { { type => 'REORDER_COLS', order => $order } },              # $order = new left-to-right column indexes
+        flex          => 1,
+        virtual       => 1,
+        row_count     => 100_000_000,
+        scroll_to_row => $model->{jump_target}, # Jump to a specific row natively
+        on_row        => sub ($idx) {
+            return {
+                id    => $idx + 1,
+                name  => "Task_Item_$idx.dat",
+                state => 'Active'
+            };
+        },
+        on_edit       => sub ( $r_idx, $col_id, $val ) {
+            { type => 'EDIT_VIRTUAL_CELL', row => $r_idx, col => $col_id, val => $val }
+        },
+        columns       => [
+            { id => 'id',   text => 'ID',   width => 80 },
+            { id => 'name', text => 'File', width => 250, editable => 1 }
+        ]
     );
 
 =head1 DESCRIPTION
 
-L<Uji::Node::ListView> is a visible, scrollable multi-column list (a table). A single selection is stored as a scalar
-in the model; with L</multiple> the value is an B<arrayref> of selected row values. On Win32 it is a native
-C<SysListView32> in report (details) view.
+C<Uji::Node::ListView> is a high-performance, multi-column tabular report view. It renders as a native OS table (Win32
+C<SysListView32> in report mode, Cocoa C<NSTableView>, or GTK4 C<GtkColumnView>) and dispatches declarative TEA
+messages on row selection, column sorting, activation (double-click/Enter), checkbox toggling, in-place cell editing,
+and right-click actions.
+
+It supports both standard static datasets and B<virtualized mode> (handling datasets of 100,000,000+ rows instantly
+with zero memory overhead) and B<in-place cell editing>.
 
 =head1 Constructor
 
 =head2 C<new ( %params )>
 
-You normally use the L<Uji|Uji/list_view> helper.
+You normally never call C<new> directly. The L<Uji|Uji/list_view> helper is exported by default:
+
+    Uji::list_view( columns => [...], rows => [...] );
 
 =head3 Parameters
 
-=head4 C<value>
-
-The currently selected row's C<value>. With L</multiple> it is an arrayref of selected row values. Default C<''>.
-Recomposed live by the reconciler.
-
 =head4 C<columns>
 
-Array reference of C<< { label => ..., width => ... } >> hashrefs defining the column headers. C<width> (pixels)
-defaults to the measured label width, C<label> defaults to C<''>. Optional per-column keys: C<sort> (C<'text'> or
-C<'numeric'>, default C<'text'>) picks the comparator used when the column is clicked (C<sortable> lists click the
-headers to sort); C<format> applies a C<sprintf> format to numeric cells for display (e.g. C<{ label => 'Price',
-width => 80, format => '$%0.2f' }> renders C<12.5> as C<$12.50> — cells always C<sort> by their raw value); and
-C<align> (C<'left'>, C<'center'> or C<'right'>, default C<'left'>) maps to the native C<LVCFMT_LEFT/CENTER/RIGHT>
-header alignment. When either the C<columns> or the C<rows> property changes the table is rebuilt; a rows-only
-change (e.g re-applying the app's own sorted C<rows>) reuses the live native columns so user-resized widths and a
-drag-reordered column order survive. The sorted column's header carries a sort indicator glyph (C<▲> ascending /
-C<▼> descending) that follows the column wherever a header drag has moved it.
+An arrayref of column definition hashrefs. Each column supports:
+
+=over
+
+=item * C<id> - Unique string identifier used to extract cell values from row hashrefs.
+
+=item * C<text> - The header label drawn in the column header bar.
+
+=item * C<width> - Pixel width (e.g. C<120>), or C<'auto'> to automatically size the column to fit content.
+
+=item * C<align> - Text alignment: C<'left'> (default), C<'center'>, or C<'right'>.
+
+=item * C<type> - Custom cell renderer: C<'text'> (default), C<'progress_bar'>, or C<'badge'>.
+C<'progress_bar'> renders a themed progress meter directly in the cell. C<'badge'> paints a colored status pill.
+
+=item * C<editable> - Boolean (default C<0>). When true, double-clicking the cell or pressing B<F2> opens an in-place
+text editor directly over the cell.
+
+=back
 
 =head4 C<rows>
 
-Array reference of the rows. Each row is either an arrayref of cell strings or a C<< { value => ..., columns => [...] } >>
-hashref; in the arrayref form the row's C<value> defaults to the first cell. When the rows change the reconciler
-rebuilds the table's contents.
+An arrayref of row data. In non-virtual mode, rows are provided as hashrefs or arrayrefs.
+
+=head4 C<virtual>
+
+Boolean (default C<0>). When set to C<1>, enables OS-level virtualized owner-data mode (Win32 C<LVS_OWNERDATA>, Cocoa
+C<NSTableViewDataSource>, GTK4 C<GtkSignalListItemFactory>). The table does not allocate native items for the entire
+dataset upfront; instead, rows are requested on-demand only for visible rows in the viewport.
+
+=head4 C<row_count>
+
+Integer. Total number of rows in L</virtual> mode. Defaults to C<scalar(@$rows)>.
+
+=head4 C<on_row>
+
+A callback C<sub ($row_index) { ... }> invoked in L</virtual> mode when the OS requests row data for visible cells.
+Must return a hashref or arrayref for that row index.
+
+=head4 C<on_edit>
+
+A callback fired when in-place cell editing is committed (user presses B<Enter> or clicks outside):
+
+    on_edit => sub ( $row_index, $col_id, $new_text ) {
+        { type => 'CELL_EDITED', row => $row_index, col => $col_id, text => $new_text }
+    }
+
+=head4 C<selected>
+
+The selected row index (0-based integer, or C<-1> for none). When L</multiselect> is enabled, this can be an arrayref
+of integers (e.g. C<[ 0, 2, 5 ]>).
+
+=head4 C<scroll_to_row>
+
+An integer index. If set to a value C<E<gt>= 0>, the native list view will instantly scroll its viewport to ensure the
+target row is visible. Set to C<-1> to allow the user to freely scroll without being snapped back.
 
 =head4 C<on_select>
 
-A callback receiving the selected row's C<value> (or an arrayref of them when L</multiple>):
+Callback fired when selection changes. In single-select mode, passes C<($index, $row)>:
 
-    on_select => sub ($v) { { type => 'SET_SKU', value => $v } }
+    on_select => sub ( $idx, $row ) { { type => 'SELECT_ROW', row => $row } }
 
-Return a message hashref (or C<undef> to ignore the event).
+In L</multiselect> mode, passes C<($indices_arrayref, $rows_arrayref)>:
+
+    on_select => sub ( $indices, $rows ) { { type => 'SELECT_MULTI', rows => $rows } }
+
+=head4 C<on_activate>
+
+Callback fired when a row is double-clicked or activated via the B<Enter> key (on non-editable cells):
+
+    on_activate => sub ( $index, $row ) { { type => 'OPEN_DETAILS', row => $row } }
+
+=head4 C<on_check>
+
+Callback fired when a row's native checkbox is clicked or toggled via the spacebar (requires L</checkboxes>):
+
+    on_check => sub ( $index, $row, $checked ) {
+        { type => 'ROW_CHECKED', id => $row->{id}, is_checked => $checked }
+    }
 
 =head4 C<on_sort>
 
-A callback received after the user clicks a column header (only when L</sortable>): C<on_sort =E<gt> sub ($col,
-$dir) { ... }> where C<$col> is the column index and C<$dir> is C<'asc'> or C<'desc'>. A click on a new column sorts
-it ascending; clicking the same column again toggles the direction. The driver reorders the L</rows> optically, but
-the model C<rows> are untouched - an app typically re-sorts its own C<rows> here to match. Return a message hashref
-(or C<undef>).
+Callback fired when the user clicks a column header:
 
-=head4 C<on_reorder>
+    on_sort => sub ( $col_id, $direction ) {
+        { type => 'SORT_TABLE', col => $col_id, dir => $direction }
+    }
 
-A callback received after the user drags a column header off its place (only when L</reorderable>):
-C<on_reorder =E<gt> sub ($order) { ... }> where C<$order> is an arrayref of the new left-to-right column indexes.
-The native control already rearranges the visible table; the app usually rewrites its C<columns>/C<rows> model order
-to match. Return a message hashref (or C<undef>).
+=head4 C<sort_column>
 
-=head4 C<sortable>
+The column C<id> currently sorted by. Renders the native visual sort arrow glyph on that column header.
 
-Boolean, default false. When true the column headers are clickable and a click reorders the visible rows by that
-column (see C<columns>/C<sort> for the comparator; C<formatted> columns still sort by their raw values). The native
-control raises C<LVN_COLUMNCLICK>, which the driver turns into a sort + L</on_sort>.
+=head4 C<sort_direction>
 
-=head4 C<reorderable>
+C<'asc'> (ascending, default) or C<'desc'> (descending). Renders the sort indicator arrow ($\uparrow$ or $\downarrow$).
 
-Boolean, default false. When true the user can drag column headers sideways to reorder the columns (the
-C<LVS_EX_HEADERDRAGDROP> extended style). The new order is detected by the driver and reported through L</on_reorder>.
+=head4 C<multiselect>
 
-=head4 C<multiple>
+Boolean (default C<0>). When C<1>, enables native B<Ctrl+Click>, B<Shift+Click> range selection, and B<Ctrl+A>.
 
-Boolean, default false. When true the table allows several rows to be selected at once and the value (and C<on_select>
-argument) is an arrayref of the selected row values. The Win32 control drops the C<LVS_SINGLESEL> style so ordinary
-clicks toggle each row.
+=head4 C<checkboxes>
+
+Boolean (default C<0>). When C<1>, displays native interactive checkboxes in the first column. Works transparently in
+both standard and L</virtual> modes.
+
+=head4 C<context_menu>
+
+A menu definition, or a dynamic builder coderef invoked when a row is right-clicked.
+
+=head4 C<gridlines>
+
+Boolean (default C<1>). Displays subtle horizontal and vertical cell gridlines.
 
 =head4 C<full_row_select>
 
-Boolean, default false. When true the entire row highlights on selection (the C<LVS_EX_FULLROWSELECT> extended style).
+Boolean (default C<1>). Clicking anywhere across a row selects the entire row.
 
-=head4 C<grid_lines>
+=head4 C<column_reorder>
 
-Boolean, default false. When true the table draws cell separator lines (the C<LVS_EX_GRIDLINES> extended style).
-
-=head4 C<header>
-
-Boolean, default true. When false the column header bar is hidden (the C<LVS_NOCOLUMNHEADER> style).
-
-=head3 Inherited Parameters
-
-L<Uji::Node::ListView> inherits the common parameters from L<Uji::Node|Uji::Node/Parameters>: C<flex>, C<enabled>,
-C<visible>, C<tooltip>, C<x>/C<y>/C<w>/C<h>, and C<id>.
+Boolean (default C<1>). Allows users to drag and drop column headers to reorder columns on screen.
 
 =head1 Methods
 
-=head2 C<value>
+Readers are available for all parameters.
 
-Returns the selected row's C<value> (or the arrayref of selected values when L</multiple>).
+=head2 C<total_row_count>
 
-=head2 C<columns>
-
-Returns the array reference of C<< { label => ..., width => ... } >> columns (possibly carrying C<sort>/C<format>).
-
-=head2 C<sortable>
-
-Returns true when clicking a column header sorts the table.
-
-=head2 C<reorderable>
-
-Returns true when the user can drag column headers to reorder the columns.
-
-=head2 C<rows>
-
-Returns the array reference of rows.
-
-=head2 C<on_select>
-
-Returns the selection callback (or C<undef>).
-
-=head2 C<multiple>
-
-Returns true when the table allows multiple selections.
-
-=head2 C<full_row_select>
-
-Returns true when the whole row highlights on selection.
-
-=head2 C<grid_lines>
-
-Returns true when cell separator lines are drawn.
-
-=head2 C<header>
-
-Returns 1 when the column header bar is shown, 0 when it is hidden.
+Returns the total count of rows (either C<row_count> if defined, or C<scalar(@$rows)>).
 
 =head2 C<type>
 
@@ -197,42 +248,39 @@ Returns the string C<'list_view'>.
 
 =head1 How it Works
 
-On Win32 the table is a native C<SysListView32> created with the report view style C<LVS_REPORT> (C<0x1>) and
-C<LVS_SHOWSELALWAYS> (C<0x8>); L</multiple> omits C<LVS_SINGLESEL> (C<0x4>) and L</header> adds C<LVS_NOCOLUMNHEADER>
-(C<0x4000>). After creation the driver sets the extended styles C<LVS_EX_DOUBLEBUFFER> (C<0x10000>), C<LVS_EX_GRIDLINES>
-(C<0x1>) per L</grid_lines>, C<LVS_EX_FULLROWSELECT> (C<0x20>) per L</full_row_select>, and C<LVS_EX_HEADERDRAGDROP>
-(C<0x10>) per L</reorderable>, via C<LVM_SETEXTENDEDLISTVIEWSTYLE>.
+=over
 
-Columns are added with C<LVM_INSERTCOLUMNW> and an 72-byte C<LVCOLUMNW> packed to the Win64 layout (mask/fmt/cx at
-0/4/8, pszText at 16). The first column of each row is inserted with C<LVM_INSERTITEMW>; later cells are written into
-the existing item with C<LVM_SETITEMW> (C<LVM_SETITEMTEXTW> is avoided: it silently no-ops for subitems). All text is
-UTF-16, copied by the control during the call so the buffers are freed immediately.
+=item * B<Win32>:
+Created as a C<SysListView32> control with C<LVS_REPORT | LVS_SHOWSELALWAYS | WS_BORDER | WS_CLIPSIBLINGS>.
+In virtual mode, C<LVS_OWNERDATA> (C<0x1000>) is set and rows are sized via C<LVM_SETITEMCOUNT>; data is populated
+lazily on-demand in C<LVN_GETDISPINFOW>. In-place editing queries the cell rectangle via C<LVM_GETSUBITEMRECT> and
+creates a subclassed floating C<EDIT> control that traps Enter and Escape via C<SetWindowSubclass>. Progress bars and
+badges are rendered through GDI in sub-item C<NM_CUSTOMDRAW> passes without child window overhead. Virtual check states
+are processed securely via C<LVHT_ONITEMSTATEICON> hit tests on C<NM_CLICK>.
 
-The model's selection is applied with C<LVM_SETITEMSTATE> carrying an C<LVITEMW> (mask C<LVIF_STATE>, state and
-stateMask C<LVIS_SELECTED>); all rows are cleared first, then each matching row is selected and scrolled into view with
-C<LVM_ENSUREVISIBLE>. User clicks raise C<LVN_ITEMCHANGED>, whose row index is routed back to the model value through a
-driver-side slot table (and, for L</multiple> tables, the whole native selection is read back via C<LVM_GETITEMCOUNT> /
-C<LVM_GETITEMSTATE>). Programmatic selection is suppressed so the native echo never dispatches a spurious C<on_select>.
+=item * B<macOS (Cocoa)>:
+Maps to a view-based C<NSTableView> with C<NSTableColumn> headers. Virtual mode uses C<NSTableViewDataSource>. Editable
+columns set C<[cellView.textField setEditable:YES]>.
 
-When L</sortable>, a header click makes the native control raise C<LVN_COLUMNCLICK> (the driver reads the column index
-from the notification). The driver re-permutes a slot table of raw cells (so a C<formatted> number column still sorts
-numerically), rebuilds the native rows with C<LVM_DELETEALLITEMS> + insert/set, re-selects the previously selected
-values (suppressed), and calls L</on_sort>. When L</reorderable> the native header drag reorders columns and data by
-itself; each driver poll queries the order array with C<LVM_GETCOLUMNORDERARRAY> (C<0x103B>) and dispatches
-L</on_reorder> when it moves.
+=item * B<Linux (GTK4)>:
+Maps to a C<GtkColumnView> with C<GtkSignalListItemFactory>, which natively virtualizes rows using a C<GListModel>.
+Editable columns bind to C<GtkEditableLabel>.
 
-The I<len> used by L<Uji::Layout|Uji::Layout/DESCRIPTION> is the value stored in the model, never a handle-mutating
-call.
+=back
 
 =head1 SEE ALSO
 
 =over
 
-=item * L<Uji> - entry point (exports C<list_view>)
+=item * L<Uji> - The toolkit entry point (exports C<list_view>)
 
-=item * L<Uji::Node::ListBox> - the single-column sibling
+=item * L<Uji::Node> - The base node class and shared parameters
 
-=item * L<Uji::Node> - base class and common parameters
+=item * L<Uji::Node::ListBox> - Single-column simple option list
+
+=item * L<Uji::Node::ScrollView> - Hardware-clipped scrollable container
+
+=item * L<Uji::App>, L<Uji::Reconciler> - The TEA runtime and diffing engine
 
 =back
 
@@ -252,11 +300,11 @@ Sanko Robinson - L<https://github.com/sanko>
 
 =begin stopwords
 
-LVM_INSERTCOLUMNW LVM_INSERTITEMW LVM_SETITEMW LVM_SETITEMSTATE LVM_ENSUREVISIBLE LVM_GETITEMCOUNT LVM_GETITEMSTATE
-LVCOLUMNW LVITEMW LVIF_STATE LVIS_SELECTED LVS_REPORT LVS_SHOWSELALWAYS LVS_SINGLESEL LVS_NOCOLUMNHEADER LVS_EX_GRIDLINES
-LVS_EX_FULLROWSELECT LVS_EX_DOUBLEBUFFER LVS_EX_HEADERDRAGDROP LVM_SETEXTENDEDLISTVIEWSTYLE LVM_DELETEALLITEMS
-LVM_GETCOLUMNORDERARRAY LVN_ITEMCHANGED LVN_COLUMNCLICK SysListView32 report multiselect arrayref hashref scrollable
-sortable reorderable on_sort on_reorder ascdesc sprintf comparator
+hashref flex multiselect listview listviews SysListView32 LVS_REPORT LVS_EX_FULLROWSELECT LVS_EX_GRIDLINES
+LVS_EX_DOUBLEBUFFER LVS_EX_HEADERDRAGDROP LVS_EX_CHECKBOXES HDF_SORTUP HDF_SORTDOWN NM_CUSTOMDRAW NM_DBLCLK NM_RETURN
+LVN_ITEMCHANGED LVN_COLUMNCLICK WM_CONTEXTMENU GtkColumnView NSTableView subitem subitems HDITEMW LVS_OWNERDATA
+LVM_SETITEMCOUNT LVN_GETDISPINFOW LVM_GETSUBITEMRECT NMITEMACTIVATE LVM_ENSUREVISIBLE SetWindowSubclass
+LVHT_ONITEMSTATEICON NM_CLICK
 
 =end stopwords
 

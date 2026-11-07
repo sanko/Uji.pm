@@ -20,11 +20,12 @@ class Uji::Node::RadioGroup v0.0.1 : isa(Uji::Node) {
         for my $opt (@$options) {
             push @kids,
                 Uji::Node::Radio->new(
+                key       => $opt->{value},
                 value     => $opt->{value},
                 label     => $opt->{label} // $opt->{value},
                 first     => $first,
-                selected  => ( $opt->{value} eq $value ? 1 : 0 ),
-                on_select => $on_select,
+                selected  => ( ( $opt->{value} // '' ) eq ( $value // '' ) ? 1 : 0 ),
+                on_select => $on_select
                 );
             $first = 0;
         }

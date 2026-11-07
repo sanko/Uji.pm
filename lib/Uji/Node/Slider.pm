@@ -7,7 +7,7 @@ class Uji::Node::Slider v0.0.1 : isa(Uji::Node) {
     field $max         : param : reader = 100;
     field $step        : param : reader = 1;
     field $on_change   : param : reader = undef;
-    field $orientation : param : reader = 'horizontal';
+    field $orientation : param : reader = 'horizontal';    # 'horizontal' | 'vertical'
     sub _type                {'slider'}
     method _mount_only_props { ['orientation'] }
 };

@@ -1,17 +1,9 @@
 use v5.40;
 use experimental 'class';
 use Uji::Draw;
-
-# The GDI+ implementation of Uji::Draw used by the Win32 driver. Each draw method
-# creates and destroys its own pen/brush, so the object carries no heavyweight
-# state beyond what Uji::Draw already holds. The raw GpGraphics* pointer is an
-# unpacked integer (same pattern as the driver's _spinner_frames/_raster_hbitmap).
-class Uji::Draw::Win32 v0.0.1 :isa(Uji::Draw) {
+class Uji::Draw::Win32 v0.0.1 : isa(Uji::Draw) {
     use Affix qw[:memory :types :core];
-
-    field $gc : param;    # raw GpGraphics* integer
-
-    # GDI+ flat API
+    field $gc : param;    # raw GpGraphics* handle
     affix 'gdiplus', 'GdipGraphicsClear',    [ Pointer [Void], Size_t ]                                           => Int;
     affix 'gdiplus', 'GdipCreatePen1',       [ Size_t, Float, Int, Pointer [Void] ]                               => Int;
     affix 'gdiplus', 'GdipDeletePen',        [ Pointer [Void] ]                                                   => Int;
@@ -26,13 +18,11 @@ class Uji::Draw::Win32 v0.0.1 :isa(Uji::Draw) {
     affix 'gdiplus', 'GdipDrawArcI',         [ Pointer [Void], Pointer [Void], Int, Int, Int, Int, Float, Float ] => Int;
     affix 'gdiplus', 'GdipFillPieI',         [ Pointer [Void], Pointer [Void], Int, Int, Int, Int, Float, Float ] => Int;
 
-    # ---- platform contract ---------------------------------------------------
-
     method _apply_smoothing () {
         GdipSetSmoothingMode( $gc, $self->antialias ? 4 : 3 );    # AntiAlias / None
     }
 
-    method _clear ( $hex ) {
+    method _clear ($hex) {
         GdipGraphicsClear( $gc, $self->_argb($hex) );
     }
 

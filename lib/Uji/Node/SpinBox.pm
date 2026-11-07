@@ -7,6 +7,7 @@ class Uji::Node::SpinBox v0.0.1 : isa(Uji::Node) {
     field $max       : param : reader = 100;
     field $step      : param : reader = 1;
     field $on_change : param : reader = undef;
+    field $focused   : param : reader = 0;
     sub _type {'spin_box'}
 };
 1;
