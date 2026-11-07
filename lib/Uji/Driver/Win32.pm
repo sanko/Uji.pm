@@ -11,9 +11,8 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
     field $wndproc_cb;
     field $main_hwnd;
     field $main_vnode      : reader;
-    field $tooltip_hwnd    : reader                      = undef;
-    field $on_resize       : reader(_get_resize_handler) = undef;
-    field $suppress_events : reader(_is_suppressed)      = 0;
+    field $tooltip_hwnd    : reader                 = undef;
+    field $suppress_events : reader(_is_suppressed) = 0;
     field $gui_font;
     field $dragging_splitter   = undef;    # { record => $rec, start_pt => [x, y], orig_ratio => 0.5 }
     field $active_inplace_edit = undef;    # { hwnd, edit_hwnd, row_idx, col_id, orig_wndproc }
@@ -809,8 +808,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
         SendMessageW( $hwnd, 0x1002, 0, Affix::address($buf) );
         free($buf);
     }
-    method _is_mounted ()           { $main_hwnd ? 1 : 0 }
-    method set_resize_handler ($cb) { $on_resize = $cb; $self }
+    method _is_mounted () { $main_hwnd ? 1 : 0 }
 
     method update_registry ($node) {
         $registry->{ $node->id }{node} = $node if exists $registry->{ $node->id };

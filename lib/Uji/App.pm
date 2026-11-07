@@ -51,11 +51,11 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
     method _flatten_subs ($raw) {
         return () unless defined $raw;
         my @result;
-        my @queue = ref $raw eq 'ARRAY' ? @$raw : ($raw);
+        my @queue = builtin::reftype $raw eq 'ARRAY' ? @$raw : ($raw);
         while (@queue) {
             my $item = shift @queue;
             next unless defined $item;
-            if ( ref $item eq 'ARRAY' ) {
+            if ( builtin::reftype $item eq 'ARRAY' ) {
                 unshift @queue, @$item;
             }
             elsif ( blessed($item) && $item->isa('Uji::Sub') ) {
@@ -124,17 +124,18 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
     # First message already read off the channel; drain any stragglers, fold every message
     # through update(), then re-render. (Extracted so tests can drive a render synchronously.)
     method _drain_and_render ($first_msg) {
-        exit(0) if ref $first_msg eq 'HASH' && $first_msg->{type} eq 'QUIT';
+        exit(0) if builtin::reftype $first_msg eq 'HASH' && $first_msg->{type} eq 'QUIT';
         my @batch = ($first_msg);
         push @batch, $channel->get() while $channel->size;
         my @cmds;
         for my $m (@batch) {
-            exit(0) if ref $m eq 'HASH' && $m->{type} eq 'QUIT';
+            if ( builtin::reftype $m eq 'HASH' ) {
 
-            # WM_SIZE -> skip the app's update (model unchanged), but fall through so
-            # the re-layout below still runs.
-            next if $m->{type} eq 'RESIZE';
-            ( my $new_model, my $new_cmd ) = $update->( $m, $model );
+                # WM_SIZE -> skip the app's update (model unchanged), but fall through so the re-layout below still runs.
+                next    if $m->{type} eq 'RESIZE';
+                exit(0) if $m->{type} eq 'QUIT';
+            }
+            ( my $new_model, my $new_cmd ) = $update->( builtin::reftype $m eq 'CODE' ? $m->() : $m, $model );
             $model = $new_model;
             push @cmds, $new_cmd if $new_cmd;
         }
@@ -164,7 +165,7 @@ class Uji::App v0.0.1 {    # The TEA Runtime (Parataxis fibers & message loop)
 
     method _run_cmd ($cmd) {
         return unless $cmd;
-        if ( ref $cmd eq 'ARRAY' ) {
+        if ( builtin::reftype $cmd eq 'ARRAY' ) {
             $self->_run_cmd($_) for @$cmd;
             return;
         }
