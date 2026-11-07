@@ -542,8 +542,9 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                     }
                     if ($row) {
                         if ( $di->{mask} & 0x0001 ) {    # LVIF_TEXT
-                            my $cid       = ( $c_idx <= $#$cols ) ? ( $cols->[$c_idx]{id} // $cols->[$c_idx]{text} // '' ) : '';
-                            my $val       = ref $row eq 'HASH'    ? ( $row->{$cid} // '' ) : ( $row->[$c_idx] // '' );
+                            my $cid = ( $c_idx <= $#$cols ) ? ( $cols->[$c_idx]{id} // $cols->[$c_idx]{text} // '' ) : '';
+                            my $val = ref $row eq 'HASH'    ? ( $row->{$cid} // '' ) : ( $row->[$c_idx] // '' );
+                            $val = sprintf $cols->[$c_idx]{format}, $val if $cols->[$c_idx]{format};
                             my $utf16     = Encode::encode( 'UTF-16LE', "$val\0" );
                             my $max_bytes = ( $di->{cchTextMax} - 1 ) * 2;
                             my $copy_len  = length($utf16) > $max_bytes ? $max_bytes : length($utf16);
@@ -2023,6 +2024,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
             else {
                 $first_text = '' . ( $row // '' );
             }
+            $first_text = sprintf $cols->[0]{format}, $first_text if $cols->[0]{format};
 
             # Allocate persistent wide-string buffer in C memory for column 0
             my $utf16_first = Encode::encode( 'UTF-16LE', $first_text . "\0" );
@@ -2048,6 +2050,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 elsif ( ref $row eq 'ARRAY' ) {
                     $sub_text = '' . ( $row->[$c_idx] // '' );
                 }
+                $sub_text = sprintf $cols->[$c_idx]{format}, $sub_text if $cols->[$c_idx]{format};
                 my $utf16_sub = Encode::encode( 'UTF-16LE', $sub_text . "\0" );
                 my $buf2      = malloc( length($utf16_sub) );
                 memcpy( $buf2, $utf16_sub, length($utf16_sub) );
@@ -2129,6 +2132,7 @@ class Uji::Driver::Win32 v0.0.1 : isa(Uji::Driver) {
                 }
                 my $cid = $col->{id} // $col->{text} // '';
                 my $val = ref $row eq 'HASH' ? ( $row->{$cid} // '' ) : ( $row->[$col_idx] // '' );
+                $val = sprintf $col->{format}, $val if defined $col->{format};
 
                 # Query exact sub-item rectangle
                 my $rptr = malloc( sizeof( RECT() ) );

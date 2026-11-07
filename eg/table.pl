@@ -32,17 +32,20 @@ sub sort_processes ( $rows, $col, $dir ) {
     my @sorted = sort { $is_desc ? $cmp->( $b, $a ) : $cmp->( $a, $b ) } @$rows;
     return \@sorted;
 }
+my $subscriptions = sub ($model) {
+    return every( 1000, sub { { type => 'TICK' } }, key => 'fake_process_activity_timer' );
+};
 my $init = sub () {
     my @initial_processes = (
-        { pid => '1048', name => 'perl.exe',         cpu => '14.2%', mem => '48.2 MB',  status => 'Running',   checked => 1 },
-        { pid => '2104', name => 'chrome.exe',       cpu => '28.5%', mem => '342.1 MB', status => 'Running',   checked => 1 },
-        { pid => '3840', name => 'code.exe',         cpu => '4.1%',  mem => '215.8 MB', status => 'Running',   checked => 0 },
-        { pid => '4192', name => 'explorer.exe',     cpu => '0.8%',  mem => '94.5 MB',  status => 'Running',   checked => 0 },
-        { pid => '5216', name => 'discord.exe',      cpu => '1.2%',  mem => '138.0 MB', status => 'Idle',      checked => 0 },
-        { pid => '6844', name => 'spotify.exe',      cpu => '2.0%',  mem => '112.4 MB', status => 'Running',   checked => 0 },
-        { pid => '7412', name => 'terminal.exe',     cpu => '0.1%',  mem => '32.6 MB',  status => 'Running',   checked => 1 },
-        { pid => '8920', name => 'postgres.exe',     cpu => '3.4%',  mem => '82.1 MB',  status => 'Running',   checked => 1 },
-        { pid => '9100', name => 'sublime_text.exe', cpu => '0.0%',  mem => '44.0 MB',  status => 'Suspended', checked => 0 }
+        { pid => '1048', name => 'perl.exe',         cpu => 14.2, mem => 48.2,  status => 'Running',   checked => 1 },
+        { pid => '2104', name => 'chrome.exe',       cpu => 28.5, mem => 342.1, status => 'Running',   checked => 1 },
+        { pid => '3840', name => 'code.exe',         cpu => 4.1,  mem => 215.8, status => 'Running',   checked => 0 },
+        { pid => '4192', name => 'explorer.exe',     cpu => 0.8,  mem => 94.5,  status => 'Running',   checked => 0 },
+        { pid => '5216', name => 'discord.exe',      cpu => 0,    mem => 138.0, status => 'Idle',      checked => 0 },
+        { pid => '6844', name => 'spotify.exe',      cpu => 2.0,  mem => 112.4, status => 'Running',   checked => 0 },
+        { pid => '7412', name => 'terminal.exe',     cpu => 0.1,  mem => 32.6,  status => 'Running',   checked => 1 },
+        { pid => '8920', name => 'postgres.exe',     cpu => 3.4,  mem => 82.1,  status => 'Running',   checked => 1 },
+        { pid => '9100', name => 'sublime_text.exe', cpu => 0.0,  mem => 44.0,  status => 'Suspended', checked => 0 }
     );
     return (
         {   search_query   => '',
@@ -140,15 +143,39 @@ my $update = sub ( $msg, $model ) {
     elsif ( $t eq 'ADD' ) {
         my $new_pid  = int( rand(9000) ) + 1000;
         my $new_proc = {
-            pid     => "$new_pid",
+            pid     => $new_pid,
             name    => "worker_$new_pid.exe",
-            cpu     => sprintf( '%.1f%%',  rand(40) ),
-            mem     => sprintf( '%.1f MB', rand(160) + 10 ),
+            cpu     => rand(40),
+            mem     => rand(160) + 10,
             status  => ( rand() > 0.3 ? 'Running' : 'Idle' ),
             checked => 0
         };
         push @{ $m->{processes} }, $new_proc;
         $m->{status_text} = "Spawned worker PID $new_pid";
+    }
+    elsif ( $t eq 'TICK' ) {
+
+        sub _min_max( $val, $min = 0, $max = 100 ) {
+            $val > $max ? $max : $val < $min ? $min : $val;
+        }
+        $m = {
+            %$model,
+            processes => [
+                map {
+                    {
+                        %$_, (
+                            $_->{status} eq 'Running' ?
+                                (
+                                cpu => _min_max( $_->{cpu} + ( rand > .5 ? rand : -rand ) ),
+                                mem => _min_max( $_->{mem} + ( rand > .5 ? rand : -rand ), .01, 1000 )
+                                ) :
+                                ()
+                            )
+                    }
+                } @{ $model->{processes} }
+            ],
+            selected_pids => [ @{ $model->{selected_pids} } ]
+        };
     }
     return ( $m, undef );
 };
@@ -263,9 +290,9 @@ my $view = sub ($model) {
                     columns      => [
                         { id => 'pid',    text => 'PID',          width => 75,  align => 'right' },
                         { id => 'name',   text => 'Process Name', width => 190, align => 'left' },
-                        { id => 'cpu',    text => 'CPU Load',     width => 130, align => 'center', type => 'progress_bar' },
-                        { id => 'mem',    text => 'Memory',       width => 105, align => 'right' },
-                        { id => 'status', text => 'Status',       width => 110, align => 'center', type => 'badge' }
+                        { id => 'cpu',    text => 'CPU Load',     width => 130, align => 'center', type   => 'progress_bar', format => '%3.2f%%' },
+                        { id => 'mem',    text => 'Memory',       width => 105, align => 'right',  format => '%3.2f MB' },
+                        { id => 'status', text => 'Status',       width => 110, align => 'center', type   => 'badge' }
                     ],
                     rows      => $sorted_rows,
                     selected  => \@selected_indices,
@@ -288,4 +315,4 @@ my $view = sub ($model) {
         )
     );
 };
-app( init => $init, update => $update, view => $view )->run();
+app( init => $init, update => $update, view => $view, subscriptions => $subscriptions )->run();
